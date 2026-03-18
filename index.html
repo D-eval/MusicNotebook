@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>音乐笔记本</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="app">
+      <button id="settingsBtn" class="settings-btn" type="button" title="设置">⚙</button>
+      <div id="settingsPanel" class="settings-panel">
+        <h3>设置</h3>
+        <p id="defaultPathHint" class="hint">保存目录：~/music_note</p>
+        <button id="changeSaveDir" class="ghost" type="button">更改保存目录</button>
+      </div>
+
+      <section id="homePage" class="page active">
+        <div class="cover-book">
+          <div class="cover-title">音乐笔记本</div>
+          <button id="openNotebookBook" class="cover-open" type="button">开始</button>
+        </div>
+      </section>
+
+      <section id="tocPage" class="page">
+        <div class="toc-split">
+          <aside class="toc-left">
+            <div class="row between wrap">
+              <h2>歌单</h2>
+            </div>
+            <ul id="playlistList" class="toc-list"></ul>
+            <div class="row wrap gap">
+              <button id="createPlaylist" class="ghost" type="button">新建歌单</button>
+              <button id="importPlaylistFolder" class="ghost" type="button">导入歌单</button>
+            </div>
+          </aside>
+          <section class="toc-right">
+            <div class="row between wrap">
+              <h2 id="songListTitle">目录</h2>
+              <button id="createNewMusic" class="ghost" type="button">新建音乐</button>
+            </div>
+            <ul id="songList" class="toc-list"></ul>
+          </section>
+        </div>
+        <input id="projectFilesInput" type="file" accept=".wav,.mp3,.m4a,.ogg,audio/*" hidden />
+      </section>
+
+      <section id="recordPage" class="page">
+        <div class="row between">
+          <h2>录制音频</h2>
+          <button class="ghost" data-back-home>返回起始页</button>
+        </div>
+        <p class="hint">开始前请准备好要播放的音乐，点击“开始录制系统声音”后再开始播放。</p>
+        <div class="row wrap gap">
+          <button id="startRecord">开始录制系统声音</button>
+          <button id="stopRecord" disabled>停止录制</button>
+          <button id="toNotesAfterRecord" class="ghost" disabled>进入笔记页</button>
+        </div>
+        <p id="recordStatus" class="status">状态：未录制</p>
+      </section>
+
+      <section id="trimPage" class="page">
+        <div class="row between wrap">
+          <h2>裁剪与增益</h2>
+          <button class="ghost" data-back-home>返回起始页</button>
+        </div>
+        <div class="panel">
+          <div id="trimWaveform"></div>
+          <div class="row wrap gap controls">
+            <button id="trimPlayPause">播放 / 暂停</button>
+            <button id="toggleTrimCreateRegion" class="ghost">创建裁剪区：关</button>
+            <button id="clearTrimRegion" class="ghost">清除裁剪区</button>
+            <span id="trimTimeInfo" class="mono">00:00.00 / 00:00.00</span>
+          </div>
+          <label>
+            增益（线性）
+            <input id="trimGain" type="range" min="0.2" max="3" step="0.01" value="1" />
+          </label>
+          <p id="trimGainInfo" class="hint">当前增益：1.00x</p>
+          <div class="row wrap gap">
+            <button id="applyTrim" class="ghost">应用裁剪并保存</button>
+            <button id="skipTrim" class="ghost">跳过裁剪进入便签</button>
+          </div>
+          <p class="hint">录制后会自动来到这里。开启“创建裁剪区”后，点击两次波形设置裁剪首尾。</p>
+        </div>
+      </section>
+
+      <section id="notesPage" class="page">
+        <button id="backToTocFromNotes" type="button" class="left-curl" title="返回目录"></button>
+        <div class="row wrap gap notes-toolbar"></div>
+
+        <div class="panel">
+          <div class="wave-wrap">
+            <div id="waveform"></div>
+            <button id="inlineImportAudio" class="inline-import ghost">导入音频</button>
+            <div id="noteContextMenu" class="note-menu">
+              <button id="menuPlayNote" type="button">播放</button>
+              <button id="menuEditNote" type="button">编辑</button>
+              <button id="menuDeleteNote" type="button">删除</button>
+            </div>
+          </div>
+          <div class="row wrap gap controls">
+            <span id="zoomInfo" class="mono">缩放: 80</span>
+            <span id="timeInfo" class="mono">00:00.00 / 00:00.00</span>
+          </div>
+          <div class="note-keybar" aria-label="wave controls">
+            <span id="wavePlayKey" class="keycap">播放</span>
+            <span id="waveLeftKey" class="keycap">左移</span>
+            <span id="waveRightKey" class="keycap">右移</span>
+            <span id="waveZoomInKey" class="keycap">放大</span>
+            <span id="waveZoomOutKey" class="keycap">缩小</span>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="fragment-title">
+            <h3>片段列表</h3>
+            <button id="createNoteFromRegion" class="fragment-add-btn" type="button" title="添加片段">+</button>
+          </div>
+          <ul id="notesList" class="notes"></ul>
+        </div>
+        <div class="panel">
+          <div class="text-plus-wrap">
+            <textarea id="songCaption" rows="3" placeholder="整首音乐评论"></textarea>
+            <button id="addSongTag" type="button" class="plus-tag-btn" title="添加标签">+</button>
+          </div>
+          <div id="songTags" class="row wrap gap"></div>
+        </div>
+      </section>
+
+      <section id="noteEditorPage" class="page">
+        <div class="row wrap gap">
+          <button id="backToWave" class="ghost">返回</button>
+        </div>
+        <div class="editor-core">
+          <div class="editor-wave-wrap">
+            <div id="editorWaveform"></div>
+            <div id="editorWaveOverlay" class="editor-wave-overlay">
+            <div id="editorAnnotationHighlights" class="editor-annotation-highlights"></div>
+            <div id="editorWaveSelection" class="editor-wave-selection">
+              <button id="editorWavePlay" class="editor-wave-play" type="button" title="播放选区">▶</button>
+            </div>
+            </div>
+          </div>
+          <div class="row wrap gap controls">
+            <span id="editorTimeInfo" class="mono">00:00.00 / 00:00.00</span>
+          </div>
+          <div class="text-plus-wrap">
+            <textarea id="caption" rows="8" placeholder="输入便签内容"></textarea>
+            <button id="addTagToNote" type="button" class="plus-tag-btn" title="添加标签">+</button>
+          </div>
+          <div id="selectedTags" class="row wrap gap"></div>
+          <div class="annotation-bar">
+            <button id="addEditorAnnotation" class="ghost" type="button">添加标记</button>
+            <button id="goAnalysis" class="ghost" type="button">扒谱</button>
+          </div>
+          <div id="annotationList" class="annotation-list"></div>
+        </div>
+      </section>
+
+      <section id="analysisPage" class="page">
+        <div class="row wrap gap">
+          <button id="analysisBack" class="ghost">返回</button>
+          <div class="analysis-toolbar">
+            <button id="analysisPlay" type="button">播放</button>
+            <span id="analysisTime" class="mono">00:00.00 / 00:00.00</span>
+            <label>
+              播放源
+              <select id="analysisPlayback">
+                <option value="audio">原音频</option>
+                <option value="notes">扒谱</option>
+              </select>
+            </label>
+            <div class="analysis-zoom">
+              <span>横向</span>
+              <button id="analysisTimeZoomOut" type="button" class="ghost plain">-</button>
+              <button id="analysisTimeZoomIn" type="button" class="ghost plain">+</button>
+              <span>纵向</span>
+              <button id="analysisFreqZoomOut" type="button" class="ghost plain">-</button>
+              <button id="analysisFreqZoomIn" type="button" class="ghost plain">+</button>
+            </div>
+            <button id="analysisSaveNotes" type="button" class="ghost plain">保存扒谱</button>
+            <button id="analysisExportMidi" type="button" class="ghost plain">导出MIDI</button>
+            <label>
+              工具
+              <select id="analysisToolSelect">
+                <option value="pencil">铅笔</option>
+                <option value="eraser">橡皮</option>
+                <option value="select">选择</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div class="analysis-tracks">
+          <span class="analysis-track-title">轨道</span>
+          <div id="analysisTrackList" class="analysis-track-list"></div>
+          <button id="analysisAddTrack" type="button" class="ghost">+ 轨道</button>
+        </div>
+        <div class="analysis-layout">
+          <div class="analysis-piano-col" aria-hidden="true">
+            <div class="analysis-piano-spacer"></div>
+            <canvas id="analysisPiano" width="64" height="520"></canvas>
+          </div>
+          <div class="analysis-visuals">
+            <div id="analysisTimebar" class="analysis-timebar">
+              <div id="analysisTimeThumb" class="analysis-time-thumb"></div>
+            </div>
+            <canvas id="analysisWave" class="analysis-wave" width="900" height="120"></canvas>
+            <div class="analysis-canvas-wrap">
+              <canvas id="analysisSpec" width="900" height="520"></canvas>
+              <canvas id="analysisNotes" width="900" height="520"></canvas>
+            </div>
+            <div id="analysisVelocityWrap" class="analysis-velocity">
+              <input id="analysisVelocity" type="range" min="0" max="1" step="0.01" value="0.7" />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div id="sourceActionModal" class="modal-backdrop">
+        <div class="modal-card">
+          <h3>原音频处理</h3>
+          <p>请选择如何处理原音频文件：</p>
+          <div class="row wrap gap">
+            <button id="modalCopyToNotebook" type="button" class="ghost">复制到笔记本</button>
+            <button id="modalMoveToNotebook" type="button" class="ghost">剪切到笔记本</button>
+          </div>
+        </div>
+      </div>
+      <div id="tagPickerModal" class="modal-backdrop">
+        <div class="modal-card">
+          <h3>选择标签</h3>
+          <div id="tagPickerList" class="row wrap gap"></div>
+          <div class="row wrap gap" style="margin-top: 10px">
+            <button id="closeTagPicker" type="button" class="ghost">关闭</button>
+          </div>
+        </div>
+      </div>
+      <div id="tocContextMenu" class="note-menu">
+        <button id="tocMenuOpen" type="button">进入</button>
+        <button id="tocMenuRename" type="button">重命名</button>
+        <button id="tocMenuDelete" type="button">删除</button>
+      </div>
+    </main>
+
+    <script src="https://unpkg.com/wavesurfer.js@6/dist/wavesurfer.min.js"></script>
+    <script src="https://unpkg.com/wavesurfer.js@6/dist/plugin/wavesurfer.regions.min.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
