@@ -31,12 +31,13 @@ def in_seg(start_second, seg_start_second, seg_end_second):
     return seg_start_second <= start_second <= seg_end_second
 
 
-target_samplerate = 16000
+target_samplerate = 44100
 
 windows_duration = 3 # s
 
-root_dir = Path("/Users/broyou/Desktop/笔记本/preprocess")
-save_dir = Path("/Users/broyou/Desktop/笔记本/preprocess1")
+root_dir = Path("../preprocess")
+save_dir = Path("../preprocess1")
+save_dir.mkdir(parents=True, exist_ok=True)
 
 windows_len = windows_duration * target_samplerate
 

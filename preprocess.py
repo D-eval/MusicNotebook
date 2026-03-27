@@ -9,8 +9,9 @@ import h5py
 import numpy as np
 
 
-root_dir = Path("/Users/broyou/Desktop/笔记本/保存/music_note")
-save_dir = Path("/Users/broyou/Desktop/笔记本/preprocess")
+root_dir = Path("../save/music_note")
+save_dir = Path("../preprocess")
+save_dir.mkdir(parents=True, exist_ok=True)
 
 data_counts = 0
 

@@ -2,8 +2,8 @@
 import h5py
 import json
 
-
-temp_save_path = '/Users/broyou/Desktop/笔记本/preprocess/0.h5'
+'''
+temp_save_path = '/Users/broyou/Desktop/笔记本/preprocess2/4.h5'
 with h5py.File(temp_save_path, "r") as f:
     segment = f["segment"][:]  # ⚡ 超快
     song_name = f.attrs["song_name"]
@@ -12,7 +12,7 @@ with h5py.File(temp_save_path, "r") as f:
     sr = f.attrs["samplerate"]
     annotations = json.loads(f["annotations"][()].decode())
     analysisTracks = json.loads(f["analysisTracks"][()].decode())
-
+'''
 # use detr
 # every slot predict a represent
 # contains midi note and timbre text description
@@ -29,7 +29,6 @@ with h5py.File(temp_save_path, "r") as f:
 
 # timbre represent 和 timbre description gt 进行对齐
 
-
 from transformers import ASTForAudioClassification
 from transformers import ASTConfig, ASTModel
 from transformers import AutoFeatureExtractor
@@ -41,6 +40,25 @@ import inspect
 configuration = ASTConfig()
 feature_extractor = AutoFeatureExtractor.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593")
 model = ASTModel.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593", attn_implementation="sdpa", dtype=torch.float32)
+
+
+
+from read import AudioDataset, collate_fn
+from torch.utils.data import DataLoader
+
+dataset = AudioDataset("/Users/broyou/Desktop/笔记本/preprocess2")
+loader = DataLoader(
+    dataset,
+    batch_size=2,
+    shuffle=True,
+    # num_workers=4,
+    collate_fn=collate_fn,
+    pin_memory=True
+)
+sr = 16000
+
+for segment, labels in loader:
+    break
 
 # backbone -> detr -> slot
 segment = segment.mean(-1)

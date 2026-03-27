@@ -12,8 +12,9 @@ import torch
 tokenizer = AutoTokenizer.from_pretrained("BAAI/bge-small-zh-v1.5")
 model = AutoModel.from_pretrained("BAAI/bge-small-zh-v1.5")
 
-root_dir = Path("/Users/broyou/Desktop/笔记本/preprocess1")
-save_dir = Path("/Users/broyou/Desktop/笔记本/preprocess2")
+root_dir = Path("../preprocess1")
+save_dir = Path("../preprocess2")
+save_dir.mkdir(parents=True, exist_ok=True)
 
 for h5_path in root_dir.glob('*.h5'):
     with h5py.File(h5_path, "r") as f:
@@ -40,4 +41,5 @@ for h5_path in root_dir.glob('*.h5'):
         g.create_dataset("duration", data=durations)
         g.create_dataset("tone", data=tones)
         g.create_dataset("text", data=emb)
+        g.create_dataset("textGT", data=texts)
     print(file_name)

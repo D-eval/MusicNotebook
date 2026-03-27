@@ -35,6 +35,7 @@ class AudioDataset(Dataset):
             durations = label_group["duration"][:]
             tones = label_group["tone"][:]
             text_emb = label_group["text"][:]   # (N, D)
+            texts = label_group["textGT"][:]
 
         # 转 tensor
         audio = torch.tensor(audio, dtype=torch.float32)
@@ -49,14 +50,15 @@ class AudioDataset(Dataset):
         target = {
             "boxes": boxes,          # (N, 2)
             "tones": tones,         # (N,)
-            "text_emb": text_emb     # (N, D)
+            "text_emb": text_emb,     # (N, D)
+            "text": [text.decode() for text in texts]
         }
 
         return audio, target
 
 
 from torch.utils.data import DataLoader
-dataset = AudioDataset("/Users/broyou/Desktop/笔记本/preprocess2")
+dataset = AudioDataset("../preprocess2")
 loader = DataLoader(
     dataset,
     batch_size=2,
@@ -72,5 +74,5 @@ for audios, targets in loader:
     for t in targets:
         print(t["boxes"].shape)      # (N, 2)
         print(t["text_emb"].shape)   # (N, D)
-
+        print(t['text'])
 
