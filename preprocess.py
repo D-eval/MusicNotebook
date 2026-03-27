@@ -1,4 +1,9 @@
-#!/usr/bin/env python3
+"""
+这个文件是为了整理成
+annotations
+analysisTracks
+"""
+
 import json
 import os
 from pathlib import Path
@@ -37,7 +42,7 @@ for temp_dir in root_dir.iterdir():
         analysisTracks = note["analysisTracks"]
 
         start, end = note["start"], note["end"]
-
+        assert 0
         start = float(start)
         end = float(end)
         if end <= start:

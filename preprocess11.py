@@ -7,24 +7,47 @@ import math
 import numpy as np
 
 def save_to_h5(data, h5_path):
+    """
+    data = {
+        "audio": (T,),
+        "label": {text: [[start,duration,pitch], ...]}
+    }
+    """
     audio = np.asarray(data["audio"], dtype=np.float32)
-    labels = data["label"]
+    label = data["label"]
 
-    starts = np.array([x["start"] for x in labels], dtype=np.float32)
-    durations = np.array([x["duration"] for x in labels], dtype=np.float32)
-    tones = np.array([x["tone"] for x in labels], dtype=np.int32)
+    # ===== 1. 构建 text vocab =====
+    texts = list(label.keys())
+    text2id = {t: i for i, t in enumerate(texts)}
 
-    text_dtype = h5py.string_dtype(encoding="utf-8")
-    texts = np.array([x["text"] for x in labels], dtype=object)
+    # ===== 2. flatten events =====
+    events = []
+    for text, notes in label.items():
+        tid = text2id[text]
+        for note in notes:
+            start, duration, pitch = note
+            events.append([start, duration, pitch, tid])
 
+    if len(events) == 0:
+        events = np.zeros((0, 4), dtype=np.float32)
+    else:
+        events = np.array(events, dtype=np.float32)
+
+    # ===== 3. 保存 =====
     with h5py.File(h5_path, "w") as f:
-        f.create_dataset("audio", data=audio)
+        f.attrs["format"] = "note_events_v2"
+        f.attrs["columns"] = ["start", "duration", "pitch", "text_id"]
 
-        g = f.create_group("label")
-        g.create_dataset("start", data=starts)
-        g.create_dataset("duration", data=durations)
-        g.create_dataset("tone", data=tones)
-        g.create_dataset("text", data=texts, dtype=text_dtype)
+        # audio
+        f.create_dataset("audio", data=audio, compression="gzip")
+
+        # events
+        f.create_dataset("events", data=events, compression="gzip")
+
+        # text vocab（关键）
+        dt = h5py.string_dtype(encoding="utf-8")
+        text_arr = np.array(texts, dtype=dt)
+        f.create_dataset("text_vocab", data=text_arr)
 
 
 def in_seg(start_second, seg_start_second, seg_end_second):
@@ -36,7 +59,7 @@ target_samplerate = 44100
 windows_duration = 3 # s
 
 root_dir = Path("../preprocess")
-save_dir = Path("../preprocess1")
+save_dir = Path("../preprocess11")
 save_dir.mkdir(parents=True, exist_ok=True)
 
 windows_len = windows_duration * target_samplerate
@@ -56,6 +79,7 @@ for temp_save_path in root_dir.glob('*.h5'):
         analysisTracks = json.loads(f["analysisTracks"][()].decode())
     # assert 0
     # analysisTracks: List[{name:text, type:has_pitch, notes:pitch}]
+    # return:
     segment = segment.mean(-1)
     segment = librosa.resample(segment, orig_sr=sr, target_sr=target_samplerate)
 
@@ -81,7 +105,7 @@ for temp_save_path in root_dir.glob('*.h5'):
         
         # seg, tone_lst, toneless_lst
         segseg = segment[start_idx:end_idx]
-        seg_notes = []
+        seg_notes = {} # {"piano":[[start, duration, pitch],...]}
            
         for ann in annotations:
             startRel = ann['startRel']
@@ -96,12 +120,10 @@ for temp_save_path in root_dir.glob('*.h5'):
             seg_endRel = windows_duration if seg_endRel >= windows_duration else seg_endRel
             seg_duration = seg_endRel - seg_startRel
             
-            new_ann = {"start": seg_startRel,
-                       "duration": seg_duration,
-                       "text": text,
-                       "tone": -1}
-            seg_notes.append(new_ann)
-
+            if seg_notes.get(text):
+                seg_notes[text].append([seg_startRel, seg_duration, -1])
+            else:
+                seg_notes[text] = [[seg_startRel, seg_duration, -1]]
         
         for timbre in analysisTracks:
             text = timbre['name']
@@ -119,15 +141,16 @@ for temp_save_path in root_dir.glob('*.h5'):
                 seg_duration = seg_endRel - seg_startRel
 
                 tone = note['midi'] if need_tone else -1
-                new_ann = {"start": seg_startRel,
-                            "duration": seg_duration,
-                            "text": text,
-                            "tone": tone}
-                seg_notes.append(new_ann)
+                    
+                if seg_notes.get(text):
+                    seg_notes[text].append([seg_startRel, seg_duration, tone])
+                else:
+                    seg_notes[text] = [[seg_startRel, seg_duration, tone]]
+                    
         # save
         data = {
-            "audio": segseg,
-            "label": seg_notes
+            "audio": segseg, # (T,)
+            "label": seg_notes # {text:[[start,duration,pitch],...],...}
         }
         path = save_dir / f"{data_counts}.h5"
         save_to_h5(data, path)
