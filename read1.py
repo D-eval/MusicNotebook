@@ -9,10 +9,10 @@ def collate_fn(batch):
     events = []
     texts = []
 
-    for audio, events, text in batch:
+    for audio, event, text in batch:
         audios.append(audio)
-        events.append(events)
-        texts.append(texts)
+        events.append(event)
+        texts.append(text)
 
     audios = torch.stack(audios, dim=0)  # (B, T)
     
@@ -32,18 +32,18 @@ class AudioDataset(Dataset):
         with h5py.File(h5_path, "r") as f:
             audio = f["audio"][:]       # (T,)
             events = f["events"][:]     # (N, 3)
-            text = f["text_vocab"][:]
+            texts = f["text_vocab"][:]
 
         # ===== 转 tensor =====
         audio = torch.from_numpy(audio).float()
         events = torch.from_numpy(events).float()
         texts = [text.decode() for text in texts]
-        return audio, events, text
+        return audio, events, texts
 
 
-from torch.utils.data import DataLoader
-dataset = AudioDataset("../preprocess11")
-audio, events, texts = dataset[0]
+# from torch.utils.data import DataLoader
+# dataset = AudioDataset("../preprocess11")
+# audio, events, texts = dataset[0]
 # loader = DataLoader(
 #     dataset,
 #     batch_size=2,

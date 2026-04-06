@@ -180,12 +180,15 @@
             </div>
             <button id="analysisSaveNotes" type="button" class="ghost plain">保存扒谱</button>
             <button id="analysisExportMidi" type="button" class="ghost plain">导出MIDI</button>
+            <button id="analysisAutoShift" type="button" class="ghost plain">自动移调</button>
+            <button id="analysisClearShiftWindow" type="button" class="ghost plain">清除选窗</button>
             <label>
               工具
               <select id="analysisToolSelect">
                 <option value="pencil">铅笔</option>
                 <option value="eraser">橡皮</option>
                 <option value="select">选择</option>
+                <option value="shift-window">选窗</option>
               </select>
             </label>
           </div>
@@ -245,5 +248,6 @@
     <script src="https://unpkg.com/wavesurfer.js@6/dist/wavesurfer.min.js"></script>
     <script src="https://unpkg.com/wavesurfer.js@6/dist/plugin/wavesurfer.regions.min.js"></script>
     <script src="app.js"></script>
+    <script src="analysis.js"></script>
   </body>
 </html>

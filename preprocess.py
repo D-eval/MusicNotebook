@@ -7,6 +7,7 @@ analysisTracks
 import json
 import os
 from pathlib import Path
+import librosa
 
 import soundfile as sf
 
@@ -30,7 +31,8 @@ for temp_dir in root_dir.iterdir():
     json_path = temp_dir / "notes.json"
     wave_path = temp_dir / f"{song_name}.mp3"
 
-    wave, sr = sf.read(str(wave_path), always_2d=True)
+    wave, sr = librosa.load(str(wave_path), sr=None, mono=False)
+    wave = wave.T  # (C, T) → (T, C)
 
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -42,7 +44,6 @@ for temp_dir in root_dir.iterdir():
         analysisTracks = note["analysisTracks"]
 
         start, end = note["start"], note["end"]
-        assert 0
         start = float(start)
         end = float(end)
         if end <= start:
