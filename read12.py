@@ -46,15 +46,18 @@ class AudioDataset(Dataset):
 # audio, events, texts = dataset[0]
 # loader = DataLoader(
 #     dataset,
-#     batch_size=2,
+#     batch_size=1,
 #     shuffle=True,
 #     # num_workers=4,
 #     collate_fn=collate_fn,
 #     pin_memory=True
 # )
 
+# shapes = []
 # for audios, events, texts in loader:
 #     # audios: (B, T)
 #     # targets: list[dict]
-#     print("ok")
+#     print(events[0].shape[0])
+#     shapes.append(events[0].shape[0])
 
+# [1, 44]
