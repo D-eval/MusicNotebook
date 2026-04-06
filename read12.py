@@ -41,20 +41,20 @@ class AudioDataset(Dataset):
         return audio, events, texts
 
 
-from torch.utils.data import DataLoader
-dataset = AudioDataset("../preprocess12")
-audio, events, texts = dataset[0]
-loader = DataLoader(
-    dataset,
-    batch_size=2,
-    shuffle=True,
-    # num_workers=4,
-    collate_fn=collate_fn,
-    pin_memory=True
-)
+# from torch.utils.data import DataLoader
+# dataset = AudioDataset("../preprocess12")
+# audio, events, texts = dataset[0]
+# loader = DataLoader(
+#     dataset,
+#     batch_size=2,
+#     shuffle=True,
+#     # num_workers=4,
+#     collate_fn=collate_fn,
+#     pin_memory=True
+# )
 
-for audios, events, texts in loader:
-    # audios: (B, T)
-    # targets: list[dict]
-    print("ok")
+# for audios, events, texts in loader:
+#     # audios: (B, T)
+#     # targets: list[dict]
+#     print("ok")
 

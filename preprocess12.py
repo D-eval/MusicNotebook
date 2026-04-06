@@ -105,20 +105,31 @@ for temp_save_path in root_dir.glob('*.h5'):
             startRel = ann['startRel']
             endRel = ann['endRel']
             if not in_seg(startRel, start_second, end_second):
-                continue
-            
-            text = ann['text']
-            
-            seg_startRel = startRel - start_second
-            seg_endRel = endRel - start_second
-            seg_endRel = windows_duration if seg_endRel >= windows_duration else seg_endRel
-            seg_duration = seg_endRel - seg_startRel
-            
-            if seg_notes.get(text):
-                seg_notes[text].append([seg_startRel, seg_duration, -1])
+                # continue
+                if in_seg(start_second, startRel, endRel):
+                    # 如果 segment 的 start 包含在 ann 里
+                    seg_endRel = min(endRel, end_second)
+                    seg_duration = seg_endRel - start_second
+                    if seg_notes.get(text):
+                        seg_notes[text].append([seg_startRel, seg_duration, -1])
+                    else:
+                        seg_notes[text] = [[seg_startRel, seg_duration, -1]]
+                    continue
+                else:
+                    continue
             else:
-                seg_notes[text] = [[seg_startRel, seg_duration, -1]]
-        
+                text = ann['text']
+                
+                seg_startRel = startRel - start_second
+                seg_endRel = endRel - start_second
+                seg_endRel = windows_duration if seg_endRel >= windows_duration else seg_endRel
+                seg_duration = seg_endRel - seg_startRel
+                
+                if seg_notes.get(text):
+                    seg_notes[text].append([seg_startRel, seg_duration, -1])
+                else:
+                    seg_notes[text] = [[seg_startRel, seg_duration, -1]]
+            
         for timbre in analysisTracks:
             text = timbre['name']
             need_tone = timbre['type'] == "pitch"
@@ -126,25 +137,39 @@ for temp_save_path in root_dir.glob('*.h5'):
             for note in timbre['notes']:
                 startRel = note['startRel']
                 endRel = note['endRel']
-                if not in_seg(startRel, start_second, end_second):
-                    continue
-
-                seg_startRel = startRel - start_second
-                seg_endRel = endRel - start_second
-                seg_endRel = windows_duration if seg_endRel >= windows_duration else seg_endRel
-                seg_duration = seg_endRel - seg_startRel
-
                 tone = note['midi'] if need_tone else -1
-                    
-                if seg_notes.get(text):
-                    seg_notes[text].append([seg_startRel, seg_duration, tone])
+                
+                if not in_seg(startRel, start_second, end_second):
+                    if in_seg(start_second, startRel, endRel):
+                        # 如果 segment 的 start 包含在 ann 里
+                        tone = note['midi'] if need_tone else -1
+                        
+                        seg_endRel = min(endRel, end_second)
+                        seg_duration = seg_endRel - start_second
+                        if seg_notes.get(text):
+                            seg_notes[text].append([seg_startRel, seg_duration, tone])
+                        else:
+                            seg_notes[text] = [[seg_startRel, seg_duration, tone]]
+                        continue
+                    else:
+                        continue
                 else:
-                    seg_notes[text] = [[seg_startRel, seg_duration, tone]]
+                    seg_startRel = startRel - start_second
+                    seg_endRel = endRel - start_second
+                    seg_endRel = windows_duration if seg_endRel >= windows_duration else seg_endRel
+                    seg_duration = seg_endRel - seg_startRel
+
+                    if seg_notes.get(text):
+                        seg_notes[text].append([seg_startRel, seg_duration, tone])
+                    else:
+                        seg_notes[text] = [[seg_startRel, seg_duration, tone]]
         # save
         # data = {
         #     "audio": segseg, # (T,)
         #     "label": seg_notes # {text:[[start,duration,pitch],...],...}
         # }
+        if len(seg_notes) == 0:
+            continue
         for text, notes in seg_notes.items():
             data = {
                 "audio": segseg, # (T,)
