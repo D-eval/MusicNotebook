@@ -16,7 +16,7 @@ def collate_fn(batch):
 
     return audios, targets
 
-
+# 数据要经过 preprocess2.py 的加工
 class AudioDataset(Dataset):
     def __init__(self, root_dir):
         self.paths = sorted(list(Path(root_dir).glob("*.h5")))
@@ -45,34 +45,33 @@ class AudioDataset(Dataset):
         tones = torch.tensor(tones, dtype=torch.long)
         text_emb = torch.tensor(text_emb, dtype=torch.float32)
 
-        boxes = torch.stack([starts, durations], dim=1)  # (N, 2)
-
         target = {
-            "boxes": boxes,          # (N, 2)
-            "tones": tones,         # (N,)
-            "text_emb": text_emb,     # (N, D)
-            "text": text
+            "start": starts[:,None],# (N, 1)
+            "sustain": durations[:,None], # (N, 1)
+            "pitch": tones[:,None],         # (N, 1)
+            "text": text_emb,     # (N, D)
+            "text_ori": text
         }
 
         return audio, target
 
 
-from torch.utils.data import DataLoader
-dataset = AudioDataset("/Users/broyou/Desktop/笔记本/preprocess2")
-loader = DataLoader(
-    dataset,
-    batch_size=2,
-    shuffle=True,
-    # num_workers=4,
-    collate_fn=collate_fn,
-    pin_memory=True
-)
+# from torch.utils.data import DataLoader
+# dataset = AudioDataset("/Users/broyou/Desktop/笔记本/preprocess2")
+# loader = DataLoader(
+#     dataset,
+#     batch_size=2,
+#     shuffle=True,
+#     # num_workers=4,
+#     collate_fn=collate_fn,
+#     pin_memory=True
+# )
 
-for audios, targets in loader:
-    # audios: (B, T)
-    # targets: list[dict]
-    for t in targets:
-        print(t["boxes"].shape)      # (N, 2)
-        print(t["text_emb"].shape)   # (N, D)
-        print(t['text'])
+# for audios, targets in loader:
+#     # audios: (B, T)
+#     # targets: list[dict]
+#     for t in targets:
+#         print(t["boxes"].shape)      # (N, 2)
+#         print(t["text_emb"].shape)   # (N, D)
+#         print(t['text'])
 

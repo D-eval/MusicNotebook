@@ -32,12 +32,13 @@ class AudioDataset(Dataset):
         with h5py.File(h5_path, "r") as f:
             audio = f["audio"][:]       # (T,)
             events = f["events"][:]     # (N, 3)
-            texts = f["text_vocab"][:]
+            texts = f["text_vocab"][()]
 
         # ===== 转 tensor =====
         audio = torch.from_numpy(audio).float()
         events = torch.from_numpy(events).float()
         texts = [text.decode() for text in texts]
+        
         return audio, events, texts
 
 

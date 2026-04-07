@@ -87,20 +87,30 @@ for temp_save_path in root_dir.glob('*.h5'):
             startRel = ann['startRel']
             endRel = ann['endRel']
             if not in_seg(startRel, start_second, end_second):
-                continue
-            
-            text = ann['text']
-            
-            seg_startRel = startRel - start_second
-            seg_endRel = endRel - start_second
-            seg_endRel = windows_duration if seg_endRel >= windows_duration else seg_endRel
-            seg_duration = seg_endRel - seg_startRel
-            
-            new_ann = {"start": seg_startRel,
-                       "duration": seg_duration,
-                       "text": text,
-                       "tone": -1}
-            seg_notes.append(new_ann)
+                if in_seg(start_second, startRel, endRel):
+                    # 如果 segment 的 start 包含在 ann 里
+                    seg_endRel = min(endRel, end_second)
+                    seg_duration = seg_endRel - start_second
+                    new_ann = {"start": seg_startRel,
+                            "duration": seg_duration,
+                            "text": text,
+                            "tone": -1}
+                    seg_notes.append(new_ann)
+                else:
+                    continue
+            else:
+                text = ann['text']
+                
+                seg_startRel = startRel - start_second
+                seg_endRel = endRel - start_second
+                seg_endRel = windows_duration if seg_endRel >= windows_duration else seg_endRel
+                seg_duration = seg_endRel - seg_startRel
+                
+                new_ann = {"start": seg_startRel,
+                        "duration": seg_duration,
+                        "text": text,
+                        "tone": -1}
+                seg_notes.append(new_ann)
 
         
         for timbre in analysisTracks:
@@ -110,20 +120,32 @@ for temp_save_path in root_dir.glob('*.h5'):
             for note in timbre['notes']:
                 startRel = note['startRel']
                 endRel = note['endRel']
-                if not in_seg(startRel, start_second, end_second):
-                    continue
-
-                seg_startRel = startRel - start_second
-                seg_endRel = endRel - start_second
-                seg_endRel = windows_duration if seg_endRel >= windows_duration else seg_endRel
-                seg_duration = seg_endRel - seg_startRel
-
                 tone = note['midi'] if need_tone else -1
-                new_ann = {"start": seg_startRel,
-                            "duration": seg_duration,
-                            "text": text,
-                            "tone": tone}
-                seg_notes.append(new_ann)
+                
+                if not in_seg(startRel, start_second, end_second):
+                    if in_seg(start_second, startRel, endRel):
+                        # 如果 segment 的 start 包含在 ann 里
+                        seg_endRel = min(endRel, end_second)
+                        seg_duration = seg_endRel - start_second
+                        new_ann = {"start": seg_startRel,
+                                "duration": seg_duration,
+                                "text": text,
+                                "tone": tone}
+                        seg_notes.append(new_ann)
+                    else:
+                        continue
+                else:
+                    seg_startRel = startRel - start_second
+                    seg_endRel = endRel - start_second
+                    seg_endRel = windows_duration if seg_endRel >= windows_duration else seg_endRel
+                    seg_duration = seg_endRel - seg_startRel
+
+                    
+                    new_ann = {"start": seg_startRel,
+                                "duration": seg_duration,
+                                "text": text,
+                                "tone": tone}
+                    seg_notes.append(new_ann)
         # save
         data = {
             "audio": segseg,

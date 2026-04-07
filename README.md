@@ -42,3 +42,30 @@
 
 ## 模型
 
+音色标注，用"，"隔开不同层级的信息，
+
+0：
+melody
+chord
+bass
+decoration
+perc
+kick
+snare
+fx
+
+1:
+pitchless
+pitch
+
+2:
+柱式和弦
+柱式织体
+分解
+琶音
+
+3:
+音色细节
+
+
+
