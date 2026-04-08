@@ -10,17 +10,15 @@ from pathlib import Path
 
 def collate_fn(batch):
     audios = []
-    events = []
-    texts = []
+    targets = []
 
-    for audio, event, text in batch:
+    for audio, target in batch:
         audios.append(audio)
-        events.append(event)
-        texts.append(text)
+        targets.append(target)
 
     audios = torch.stack(audios, dim=0)  # (B, T)
     
-    return audios, events, texts
+    return audios, targets
 
 
 class AudioDataset(Dataset):
