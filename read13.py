@@ -1,3 +1,7 @@
+"""
+for detr2
+"""
+
 import torch
 from torch.utils.data import Dataset
 import h5py
@@ -41,10 +45,20 @@ class AudioDataset(Dataset):
 
         # ===== 转 tensor =====
         audio = torch.from_numpy(audio).float()
-        events = torch.from_numpy(events).float()
+        events = torch.from_numpy(events[:,:2]).float()
+        pitch = torch.from_numpy(events[:,2]).long()
+        text_idx = torch.from_numpy(events[:,3]).long()
         texts = [text.decode() for text in texts]
         
-        return audio, events, texts
+        target = {
+            "start": events[:,0],# (Ne,)
+            "sustain": events[:,1], # (Ne,)
+            "pitch": pitch[:,], # (Ne,)
+            "text": texts,     # List[str] Nt
+            "text_idx": text_idx # (Ne,)
+        }
+        
+        return audio, target
 
 
 from torch.utils.data import DataLoader
