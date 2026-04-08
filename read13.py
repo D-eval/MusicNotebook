@@ -48,9 +48,10 @@ class AudioDataset(Dataset):
             events = f["events"][:]     # (N, 3)
             texts = f["text_vocab"][()]
 
+        print(events.shape)
         # ===== 转 tensor =====
         audio = torch.from_numpy(audio).float()
-        events = torch.from_numpy(events[:,:2]).float()
+        startSustain = torch.from_numpy(events[:,:2]).float()
         pitch = torch.from_numpy(events[:,2]).long()
         text_idx = torch.from_numpy(events[:,3]).long()
         texts = [text.decode() for text in texts]
@@ -58,8 +59,8 @@ class AudioDataset(Dataset):
         pitch = self.normalize_pitch(pitch)
         
         target = {
-            "start": events[:,0],# (Ne,)
-            "sustain": events[:,1], # (Ne,)
+            "start": startSustain[:,0],# (Ne,)
+            "sustain": startSustain[:,1], # (Ne,)
             "pitch": pitch[:,], # (Ne,)
             "text": texts,     # List[str] Nt
             "text_idx": text_idx # (Ne,)
@@ -93,17 +94,17 @@ class AudioDataset(Dataset):
         pitch[neg_mask] = self.num_pitchs
         return pitch
 
-from torch.utils.data import DataLoader
-dataset = AudioDataset("../preprocess11")
-audio, events, texts = dataset[0]
-loader = DataLoader(
-    dataset,
-    batch_size=2,
-    shuffle=True,
-    # num_workers=4,
-    collate_fn=collate_fn,
-    pin_memory=True
-)
+# from torch.utils.data import DataLoader
+# dataset = AudioDataset("../preprocess11")
+# audio, target = dataset[0]
+# loader = DataLoader(
+#     dataset,
+#     batch_size=2,
+#     shuffle=True,
+#     # num_workers=4,
+#     collate_fn=collate_fn,
+#     pin_memory=True
+# )
 
 # for audios, targets in loader:
 #     # audios: (B, T)
