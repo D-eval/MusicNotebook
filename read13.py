@@ -24,8 +24,13 @@ def collate_fn(batch):
 
 
 class AudioDataset(Dataset):
-    def __init__(self, root_dir):
+    def __init__(self, root_dir, min_pitch=24, max_pitch=107):
         self.paths = sorted(list(Path(root_dir).glob("*.h5")))
+        num_pitchs = max_pitch - min_pitch + 1
+        
+        self.min_pitch = min_pitch
+        self.max_pitch = max_pitch
+        self.num_pitchs = num_pitchs
 
     def __len__(self):
         return len(self.paths)
@@ -50,6 +55,8 @@ class AudioDataset(Dataset):
         text_idx = torch.from_numpy(events[:,3]).long()
         texts = [text.decode() for text in texts]
         
+        pitch = self.normalize_pitch(pitch)
+        
         target = {
             "start": events[:,0],# (Ne,)
             "sustain": events[:,1], # (Ne,)
@@ -59,7 +66,32 @@ class AudioDataset(Dataset):
         }
         
         return audio, target
+    def normalize_pitch(self, pitch):
+        """
+        pitch: (N,) tensor (long)
+        """
+        neg_mask = (pitch == -1)
+        # ===== 2. fold 到合法区间 =====
+        valid_mask = ~neg_mask
+        p = pitch[valid_mask]
+        while True:
+            too_low = p < self.min_pitch
+            too_high = p > self.max_pitch
 
+            if not (too_low.any() or too_high.any()):
+                break
+
+            p[too_low] += 12
+            p[too_high] -= 12
+
+        pitch[valid_mask] = p
+
+        # ===== 3. 映射到 index =====
+        pitch[valid_mask] = pitch[valid_mask] - self.min_pitch  # → [0, vocab_size-1]
+
+        # ===== 4. -1 → 最后一类 =====
+        pitch[neg_mask] = self.num_pitchs
+        return pitch
 
 from torch.utils.data import DataLoader
 dataset = AudioDataset("../preprocess11")
