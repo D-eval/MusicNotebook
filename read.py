@@ -3,6 +3,22 @@ from torch.utils.data import Dataset
 import h5py
 from pathlib import Path
 
+def to_device(batch, device):
+    if torch.is_tensor(batch):
+        return batch.to(device)
+    elif isinstance(batch, dict):
+        return {
+            k: to_device(v, device)
+            for k, v in batch.items()
+            if k != "text_ori"  # ⚠️ 非 tensor 跳过
+        } | {
+            "text_ori": batch["text_ori"]
+        }
+    elif isinstance(batch, list):
+        return [to_device(x, device) for x in batch]
+    else:
+        return batch
+
 
 def collate_fn(batch):
     audios = []
@@ -46,15 +62,62 @@ class AudioDataset(Dataset):
         text_emb = torch.tensor(text_emb, dtype=torch.float32)
 
         target = {
-            "start": starts[:,None],# (N, 1)
-            "sustain": durations[:,None], # (N, 1)
-            "pitch": tones[:,None],         # (N, 1)
+            "start": starts,# (N,)
+            "sustain": durations, # (N,)
+            "pitch": tones,         # (N,)
             "text": text_emb,     # (N, D)
             "text_ori": text
         }
 
         return audio, target
+    
+    def get_pitch_stats(self, verbose=True):
+        """
+        遍历整个 dataset，统计 pitch 的 min / max / unique
+        """
+        pitch_min = None
+        pitch_max = None
+        pitch_set = set()
 
+        for i, path in enumerate(self.paths):
+            try:
+                with h5py.File(path, "r") as f:
+                    tones = f["label"]["tone"][:]  # numpy array (N,)
+            except Exception as e:
+                print(f"❌ failed to read {path}: {e}")
+                continue
+
+            if len(tones) == 0:
+                continue
+
+            local_min = tones.min()
+            local_max = tones.max()
+
+            if pitch_min is None:
+                pitch_min = local_min
+                pitch_max = local_max
+            else:
+                pitch_min = min(pitch_min, local_min)
+                pitch_max = max(pitch_max, local_max)
+
+            pitch_set.update(tones.tolist())
+
+            if verbose and i % 100 == 0:
+                print(f"[{i}/{len(self.paths)}] current range: {pitch_min} ~ {pitch_max}")
+
+        print("\n===== Pitch Stats =====")
+        print(f"min pitch: {pitch_min}")
+        print(f"max pitch: {pitch_max}")
+        print(f"unique pitch count: {len(pitch_set)}")
+
+        # 可选：打印所有类别
+        sorted_pitch = sorted(pitch_set)
+        print(f"unique pitch values:\n{sorted_pitch}")
+
+        self.pitch_min = pitch_min
+        self.mitch_max = pitch_max
+        
+        return pitch_min, pitch_max, sorted_pitch
 
 # from torch.utils.data import DataLoader
 # dataset = AudioDataset("/Users/broyou/Desktop/笔记本/preprocess2")

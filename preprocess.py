@@ -13,7 +13,15 @@ import soundfile as sf
 
 import h5py
 import numpy as np
+import subprocess
 
+def convert_to_wav(path):
+    wav_path = path.replace(".mp3", ".wav")
+    subprocess.run(
+        f'ffmpeg -y -i "{path}" "{wav_path}"',
+        shell=True
+    )
+    return wav_path
 
 root_dir = Path("../save/music_note")
 save_dir = Path("../preprocess")
@@ -31,7 +39,13 @@ for temp_dir in root_dir.iterdir():
     json_path = temp_dir / "notes.json"
     wave_path = temp_dir / f"{song_name}.mp3"
 
-    wave, sr = librosa.load(str(wave_path), sr=None, mono=False)
+    try:
+        wave, sr = librosa.load(str(wave_path), sr=None, mono=False)
+    except Exception as e:
+        print(f"⚠️ librosa failed → try ffmpeg: {e}")
+        wav_path = convert_to_wav(str(wave_path))
+        wave, sr = librosa.load(str(wav_path), sr=None, mono=False)
+
     wave = wave.T  # (C, T) → (T, C)
 
     with open(json_path, "r", encoding="utf-8") as f:
@@ -72,6 +86,7 @@ for temp_dir in root_dir.iterdir():
             f.create_dataset("analysisTracks", data=np.bytes_(json.dumps(analysisTracks)))
         data_counts += 1
 
+print("完了")
 # sf.write(data=segment,samplerate=sr,file="./a.wav")
 
 
