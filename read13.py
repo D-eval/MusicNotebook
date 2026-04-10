@@ -54,6 +54,8 @@ class AudioDataset(Dataset):
         text_idx = torch.from_numpy(events[:,3]).long()
         texts = [text.decode() for text in texts]
         
+        label = [text.split("，")[0] for text in texts]
+        
         pitch = self.normalize_pitch(pitch)
         
         target = {
@@ -61,7 +63,8 @@ class AudioDataset(Dataset):
             "sustain": startSustain[:,1], # (Ne,)
             "pitch": pitch[:,], # (Ne,)
             "text": texts,     # List[str] Nt
-            "text_idx": text_idx # (Ne,)
+            "text_idx": text_idx, # (Ne,)
+            "label": label,
         }
         
         return audio, target
