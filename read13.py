@@ -46,7 +46,6 @@ class AudioDataset(Dataset):
             events = f["events"][:]     # (N, 3)
             texts = f["text_vocab"][()]
 
-        print(events.shape)
         # ===== 转 tensor =====
         audio = torch.from_numpy(audio).float()
         startSustain = torch.from_numpy(events[:,:2]).float()
