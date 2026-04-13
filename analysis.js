@@ -333,10 +333,15 @@ function ensureAnalysisTracks() {
   state.analysisNotes = track.notes;
 }
 
-function getRenderableTracks() {
-  const solos = state.analysisTracks.filter((t) => t.solo);
-  const base = solos.length ? solos : state.analysisTracks;
-  return base.filter((t) => !t.muted);
+function getRenderableTracks(options = {}) {
+  let tracks = state.analysisTracks || [];
+  const soloed = tracks.filter((t) => t.solo);
+  if (soloed.length) tracks = soloed;
+  tracks = tracks.filter((t) => !t.muted);
+  if (!options.renderAll && state.analysisShowActiveOnly && state.analysisActiveTrackId) {
+    tracks = tracks.filter((t) => t.id === state.analysisActiveTrackId);
+  }
+  return tracks;
 }
 
 function getTrackColor(idx) {
@@ -502,7 +507,7 @@ function drawAnalysisNotes() {
   canvas.height = offset + gridHeight;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   const binH = grid.binH;
-  const tracks = state.analysisTracks.length ? state.analysisTracks : [];
+  const tracks = getRenderableTracks();
   tracks.forEach((track, idx) => {
     const hue = getTrackHue(idx);
     track.notes.forEach((note) => {
@@ -568,10 +573,32 @@ function updateAnalysisTimeUI() {
   }
 }
 
+function clampVolume(value, min = 0, max = 1) {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, value));
+}
+
+function applyAnalysisAudioVolume() {
+  if (state.analysisAudio) {
+    state.analysisAudio.volume = clampVolume(state.analysisAudioVolume ?? 0.8, 0, 1);
+  }
+}
+
+function applyAnalysisSynthVolume() {
+  if (state.analysisSynth && state.analysisSynth.master) {
+    state.analysisSynth.master.gain.value = clampVolume(state.analysisNotesVolume ?? 0.7, 0, 1);
+  }
+}
+
+function getAnalysisPreviewVolume() {
+  return clampVolume(state.analysisPreviewVolume ?? 1, 0, 2);
+}
+
 function ensureAnalysisAudio() {
   if (state.analysisAudio) return;
   const audio = new Audio();
   state.analysisAudio = audio;
+  applyAnalysisAudioVolume();
   audio.addEventListener('timeupdate', () => {
     if (state.analysisAudio !== audio) return;
     updateAnalysisTimeUI();
@@ -579,11 +606,13 @@ function ensureAnalysisAudio() {
     if (audio.currentTime >= state.analysisRange.end) {
       audio.pause();
       audio.currentTime = state.analysisRange.end;
+      stopAnalysisSynth();
       if (ui.analysisPlay) ui.analysisPlay.textContent = '播放';
     }
   });
   audio.addEventListener('ended', () => {
     if (state.analysisAudio !== audio) return;
+    stopAnalysisSynth();
     if (ui.analysisPlay) ui.analysisPlay.textContent = '播放';
   });
 }
@@ -598,6 +627,7 @@ function setAnalysisAudioSource() {
   const safeBlob = state.audioBlob.slice(0, state.audioBlob.size, state.audioBlob.type || 'audio/wav');
   state.analysisAudioUrl = URL.createObjectURL(safeBlob);
   state.analysisAudio.src = state.analysisAudioUrl;
+  applyAnalysisAudioVolume();
   state.analysisAudio.load();
   state.analysisAudio.currentTime = state.analysisView.start || state.analysisRange.start;
   updateAnalysisTimeUI();
@@ -816,11 +846,29 @@ function renderAnalysisTracks() {
       drawAnalysisNotes();
     });
 
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'ghost track-toggle';
+    deleteBtn.textContent = '删';
+    deleteBtn.addEventListener('click', () => {
+      const idxToRemove = state.analysisTracks.findIndex((t) => t.id === track.id);
+      if (idxToRemove >= 0) {
+        state.analysisTracks.splice(idxToRemove, 1);
+        if (state.analysisActiveTrackId === track.id) {
+          const next = state.analysisTracks[idxToRemove] || state.analysisTracks[idxToRemove - 1] || state.analysisTracks[0];
+          state.analysisActiveTrackId = next ? next.id : null;
+        }
+        renderAnalysisTracks();
+        drawAnalysisNotes();
+      }
+    });
+
     item.appendChild(selectBtn);
     item.appendChild(nameInput);
     item.appendChild(typeSelect);
     item.appendChild(muteBtn);
     item.appendChild(soloBtn);
+    item.appendChild(deleteBtn);
     ui.analysisTrackList.appendChild(item);
   });
 }
@@ -839,24 +887,32 @@ function stopAnalysisSynth() {
   } catch {}
   state.analysisSynth = null;
   state.analysisSynthPlaying = false;
+state.analysisShowActiveOnly = false;
 }
 
-function playAnalysisNotes() {
+function playAnalysisNotes(options = {}) {
   stopAnalysisSynth();
   const tracks = getRenderableTracks();
   if (!tracks.length) return;
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
   const oscList = [];
+  const master = ctx.createGain();
+  master.gain.value = clampVolume(state.analysisNotesVolume ?? 0.7, 0, 1);
+  master.connect(ctx.destination);
   const now = ctx.currentTime;
   const rangeStart = state.analysisRange.start;
   const rangeEnd = state.analysisRange.end;
-  const duration = Math.max(0.01, rangeEnd - rangeStart);
+  const syncToAudio = !!options.syncToAudio;
+  const playbackStart = syncToAudio && state.analysisAudio
+    ? clamp(state.analysisAudio.currentTime, rangeStart, rangeEnd)
+    : rangeStart;
+  const duration = Math.max(0.01, rangeEnd - playbackStart);
   state.analysisSynthStart = performance.now() / 1000;
   state.analysisSynthPlaying = true;
   tracks.forEach((track) => {
     track.notes.forEach((note) => {
-      const start = note.start - rangeStart;
-      const end = note.end - rangeStart;
+      const start = note.start - playbackStart;
+      const end = note.end - playbackStart;
       if (end <= 0 || start >= duration) return;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -872,25 +928,25 @@ function playAnalysisNotes() {
         );
         gain.gain.setValueAtTime(0.2 * vel, now + Math.max(0, start));
         gain.gain.exponentialRampToValueAtTime(0.0001, now + Math.max(0, start) + dur);
-        osc.connect(gain).connect(ctx.destination);
+        osc.connect(gain).connect(master);
         osc.start(now + Math.max(0, start));
         osc.stop(now + Math.max(0, start) + dur + 0.02);
       } else {
         osc.frequency.value = freq;
         gain.gain.value = 0.15 * vel;
-        osc.connect(gain).connect(ctx.destination);
+        osc.connect(gain).connect(master);
         osc.start(now + Math.max(0, start));
         osc.stop(now + Math.max(start + 0.01, end));
       }
       oscList.push(osc);
     });
   });
-  state.analysisSynth = { ctx, oscList };
+  state.analysisSynth = { ctx, oscList, master };
   const endAt = now + duration + 0.05;
   const tick = () => {
     if (!state.analysisSynthPlaying) return;
     const elapsed = ctx.currentTime - now;
-    if (state.analysisAudio) {
+    if (!syncToAudio && state.analysisAudio) {
       state.analysisAudio.currentTime = state.analysisRange.start + elapsed;
     }
     updateAnalysisTimeUI();
@@ -906,8 +962,9 @@ function playAnalysisNotes() {
 }
 
 function toggleAnalysisPlayback() {
-  const source = ui.analysisPlayback?.value || 'audio';
+  const source = 'mix';
   if (source === 'notes') {
+    if (state.analysisAudio && !state.analysisAudio.paused) state.analysisAudio.pause();
     if (state.analysisSynthPlaying) {
       stopAnalysisSynth();
       if (ui.analysisPlay) ui.analysisPlay.textContent = '播放';
@@ -915,6 +972,35 @@ function toggleAnalysisPlayback() {
       playAnalysisNotes();
       if (ui.analysisPlay) ui.analysisPlay.textContent = '暂停';
     }
+    return;
+  }
+  if (source === 'mix') {
+    ensureAnalysisAudio();
+    if (!state.audioBlob) {
+      setStatus('未加载音频，无法播放原音频');
+      return;
+    }
+    if (!state.analysisAudio.src) {
+      setAnalysisAudioSource();
+    }
+    if (state.analysisAudio.readyState === 0) {
+      state.analysisAudio.load();
+    }
+    const isPlaying = (state.analysisAudio && !state.analysisAudio.paused) || state.analysisSynthPlaying;
+    if (isPlaying) {
+      if (state.analysisAudio) state.analysisAudio.pause();
+      stopAnalysisSynth();
+      if (ui.analysisPlay) ui.analysisPlay.textContent = '播放';
+      return;
+    }
+    const base = clamp(state.analysisAudio.currentTime, state.analysisRange.start, state.analysisRange.end);
+    state.analysisAudio.currentTime = base;
+    state.analysisAudio.play().catch(() => {
+      setStatus('原音频无法播放（音频源不支持或未就绪）');
+      if (ui.analysisPlay) ui.analysisPlay.textContent = '播放';
+    });
+    playAnalysisNotes({ syncToAudio: true });
+    if (ui.analysisPlay) ui.analysisPlay.textContent = '暂停';
     return;
   }
   ensureAnalysisAudio();
@@ -929,6 +1015,7 @@ function toggleAnalysisPlayback() {
     state.analysisAudio.load();
   }
   if (state.analysisAudio.paused) {
+    stopAnalysisSynth();
     state.analysisAudio.play().catch(() => {
       setStatus('原音频无法播放（音频源不支持或未就绪）');
       if (ui.analysisPlay) ui.analysisPlay.textContent = '播放';
@@ -953,24 +1040,26 @@ function toggleAnalysisPlayback() {
   }
 }
 
-function playNotePreview(midi, velocity = 0.7, type = 'pitch') {
+function playNotePreview(midi, velocity = 0.7, type = 'pitch', duration = 0.12) {
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
   const osc = ctx.createOscillator();
   const gain = ctx.createGain();
   const freq = 440 * Math.pow(2, (midi - 69) / 12);
+  const previewVol = getAnalysisPreviewVolume();
   osc.type = 'sine';
   if (type === 'transient') {
     osc.frequency.setValueAtTime(freq * 2, ctx.currentTime);
     osc.frequency.exponentialRampToValueAtTime(Math.max(40, freq * 0.3), ctx.currentTime + 0.12);
-    gain.gain.setValueAtTime(0.18 * clamp(velocity, 0, 1), ctx.currentTime);
+    gain.gain.setValueAtTime(0.18 * clamp(velocity, 0, 1) * previewVol, ctx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.12);
   } else {
     osc.frequency.value = freq;
-    gain.gain.value = 0.12 * clamp(velocity, 0, 1);
+    gain.gain.value = 0.12 * clamp(velocity, 0, 1) * previewVol;
   }
   osc.connect(gain).connect(ctx.destination);
   osc.start();
-  osc.stop(ctx.currentTime + 0.12);
+  const sustain = Math.max(0.06, Math.min(8, duration || 0.12));
+  osc.stop(ctx.currentTime + sustain);
   osc.onended = () => ctx.close();
 }
 
@@ -1322,6 +1411,11 @@ ui.goAnalysis.addEventListener('click', () => {
   showPage('analysis', 'editor-grow');
   drawPiano(ui.analysisPiano);
   setAnalysisTool('pencil');
+  if (ui.analysisAudioVolume) ui.analysisAudioVolume.value = String(state.analysisAudioVolume ?? 0.8);
+  if (ui.analysisNotesVolume) ui.analysisNotesVolume.value = String(state.analysisNotesVolume ?? 0.7);
+  if (ui.analysisPreviewVolume) ui.analysisPreviewVolume.value = String(state.analysisPreviewVolume ?? 1);
+  applyAnalysisAudioVolume();
+  applyAnalysisSynthVolume();
   setAnalysisAudioSource();
   loadAnalysisNotesForTarget();
   renderAnalysisTracks();
@@ -1376,19 +1470,6 @@ if (ui.analysisAddTrack) {
     drawAnalysisNotes();
   });
 }
-if (ui.analysisPlayback) {
-  ui.analysisPlayback.addEventListener('change', () => {
-    if (ui.analysisPlayback.value === 'notes') {
-      if (state.analysisAudio && !state.analysisAudio.paused) {
-        state.analysisAudio.pause();
-      }
-      if (ui.analysisPlay) ui.analysisPlay.textContent = '播放';
-    } else {
-      stopAnalysisSynth();
-      if (ui.analysisPlay) ui.analysisPlay.textContent = '播放';
-    }
-  });
-}
 if (ui.analysisTimeZoomIn) {
   ui.analysisTimeZoomIn.addEventListener('click', () => {
     const zoom = 1.2;
@@ -1428,6 +1509,34 @@ if (ui.analysisFreqZoomIn) {
 ui.analysisPlay.addEventListener('click', () => {
   toggleAnalysisPlayback();
 });
+if (ui.analysisShowActiveOnly) {
+  ui.analysisShowActiveOnly.addEventListener('change', () => {
+    state.analysisShowActiveOnly = !!ui.analysisShowActiveOnly.checked;
+    if (ui.analysisNotes) {
+      const ctx = ui.analysisNotes.getContext('2d');
+      if (ctx) ctx.clearRect(0, 0, ui.analysisNotes.width, ui.analysisNotes.height);
+    }
+    drawAnalysisNotes();
+  });
+}
+if (ui.analysisAudioVolume) {
+  ui.analysisAudioVolume.addEventListener('input', () => {
+    state.analysisAudioVolume = parseFloat(ui.analysisAudioVolume.value || '0.8');
+    applyAnalysisAudioVolume();
+  });
+}
+if (ui.analysisNotesVolume) {
+  ui.analysisNotesVolume.addEventListener('input', () => {
+    state.analysisNotesVolume = parseFloat(ui.analysisNotesVolume.value || '0.7');
+    applyAnalysisSynthVolume();
+  });
+}
+if (ui.analysisPreviewVolume) {
+  ui.analysisPreviewVolume.addEventListener('input', () => {
+    state.analysisPreviewVolume = parseFloat(ui.analysisPreviewVolume.value || '1');
+  });
+}
+
 if (ui.analysisSaveNotes) {
   ui.analysisSaveNotes.addEventListener('click', async () => {
     persistAnalysisNotesToTarget();
@@ -1549,7 +1658,7 @@ if (ui.analysisNotes) {
         setActiveAnalysisTrack(hit.track.id);
         state.analysisSelectedId = hit.note.id;
         state.analysisSelectedTrackId = hit.track.id;
-        playNotePreview(hit.note.midi, hit.note.velocity, hit.track.type);
+        playNotePreview(hit.note.midi, hit.note.velocity, hit.track.type, Math.max(0.06, hit.note.end - hit.note.start));
         const edge = 6;
         let mode = 'move';
         if (Math.abs(x - hit.x0) <= edge) mode = 'resize-left';
@@ -1588,7 +1697,7 @@ if (ui.analysisNotes) {
         setActiveAnalysisTrack(hit.track.id);
         state.analysisSelectedId = hit.note.id;
         state.analysisSelectedTrackId = hit.track.id;
-        playNotePreview(hit.note.midi, hit.note.velocity, hit.track.type);
+        playNotePreview(hit.note.midi, hit.note.velocity, hit.track.type, Math.max(0.06, hit.note.end - hit.note.start));
         const edge = 6;
         let mode = 'move';
         if (Math.abs(x - hit.x0) <= edge) mode = 'resize-left';
@@ -1620,7 +1729,7 @@ if (ui.analysisNotes) {
         activeTrack.notes.push(note);
         state.analysisSelectedId = note.id;
         state.analysisSelectedTrackId = activeTrack.id;
-        playNotePreview(note.midi, note.velocity, activeTrack.type);
+        playNotePreview(note.midi, note.velocity, activeTrack.type, Math.max(0.06, note.end - note.start));
         state.analysisDrag = {
           id: note.id,
           trackId: activeTrack.id,
@@ -1676,7 +1785,7 @@ if (ui.analysisNotes) {
       note.end = drag.end + dt;
       note.midi = drag.midi + dmidi;
       if (note.midi !== drag.lastMidi) {
-        playNotePreview(note.midi, note.velocity, track?.type || 'pitch');
+        playNotePreview(note.midi, note.velocity, track?.type || 'pitch', Math.max(0.06, note.end - note.start));
         drag.lastMidi = note.midi;
       }
     } else if (drag.mode === 'resize-left') {

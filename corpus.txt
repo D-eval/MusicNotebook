@@ -1,0 +1,51 @@
+<shape>
+
+和midi的形状对齐，且能粗略反应音色特征
+
+每个role的event最多20个
+
+line & block
+
+加入音高确定度，二值
+
+当确定度较低时作为pitchless
+较高时作为pitch
+
+但是我们都detr了，完全不需要这种约束
+
+
+block_chord，柱式和弦，start 基本相同，pitch不同
+ostinato，分解和弦，riff，反复的动机，start 有区别，pitch不同，有一定规律
+melody，旋律线，start sustain前赴后继出现
+rhythm_pattern，节奏，pitchless，start出现有周期
+ambience，氛围音，pad，pitchless，sustain较长，混响较大难以识别，或者已经被母带拉糊了，所以标在pitchless轨道
+bass_sustain，sustain较长的bassline
+bass_active，sustain较短的bassline
+arpeggio，滑音，过渡音群，包括快速琶音，start密集
+fill，填充音色，slap，glitch，补充节奏，稀疏
+
+
+转折
+氛围，补充频段
+
+
+<inst>
+piano
+female vocal
+male vocal
+string
+bass
+kick
+snare
+perc
+fx
+combo
+
+<desc>
+
+for chord:
+CM, Cm, C7, CM7...
+
+for 
+
+<ignore_sustain>

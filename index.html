@@ -163,12 +163,17 @@
           <div class="analysis-toolbar">
             <button id="analysisPlay" type="button">播放</button>
             <span id="analysisTime" class="mono">00:00.00 / 00:00.00</span>
-            <label>
-              播放源
-              <select id="analysisPlayback">
-                <option value="audio">原音频</option>
-                <option value="notes">扒谱</option>
-              </select>
+            <label class="analysis-volume">
+              原音频音量
+              <input id="analysisAudioVolume" type="range" min="0" max="1" step="0.01" value="0.8" />
+            </label>
+            <label class="analysis-volume">
+              扒谱音量
+              <input id="analysisNotesVolume" type="range" min="0" max="1" step="0.01" value="0.7" />
+            </label>
+            <label class="analysis-volume">
+              试听音量
+              <input id="analysisPreviewVolume" type="range" min="0" max="2" step="0.01" value="1" />
             </label>
             <div class="analysis-zoom">
               <span>横向</span>
@@ -190,6 +195,10 @@
                 <option value="select">选择</option>
                 <option value="shift-window">选窗</option>
               </select>
+            </label>
+            <label class="analysis-toggle">
+              <input id="analysisShowActiveOnly" type="checkbox" />
+              仅显示当前轨道
             </label>
           </div>
         </div>
