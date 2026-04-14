@@ -68,7 +68,7 @@ function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
 
-const ROOT_THRESHOLD_SEC = 0.2;
+const ROOT_THRESHOLD_SEC = 0.05;
 
 function buildWindow(windowLen, type) {
   const window = new Float32Array(windowLen);
@@ -454,8 +454,21 @@ function analysisViewYSpan() {
 }
 
 function setAnalysisViewY(minMidi, maxMidi) {
-  const min = Math.round(minMidi);
-  const max = Math.max(min + 1, Math.round(maxMidi));
+  const minLimit = 24;
+  const maxLimit = 107;
+  let min = Math.round(minMidi);
+  let max = Math.max(min + 1, Math.round(maxMidi));
+  const span = Math.max(1, max - min);
+  if (min < minLimit) {
+    min = minLimit;
+    max = min + span;
+  }
+  if (max > maxLimit) {
+    max = maxLimit;
+    min = max - span;
+  }
+  min = Math.max(minLimit, Math.min(min, maxLimit - 1));
+  max = Math.max(min + 1, Math.min(max, maxLimit));
   state.analysisViewY = { min, max };
   drawPiano(ui.analysisPiano);
   drawAnalysisNotes();
