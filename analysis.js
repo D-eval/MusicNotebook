@@ -68,6 +68,8 @@ function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
 
+const ROOT_THRESHOLD_SEC = 0.2;
+
 function buildWindow(windowLen, type) {
   const window = new Float32Array(windowLen);
   const denom = Math.max(1, windowLen - 1);
@@ -507,6 +509,29 @@ function drawAnalysisNotes() {
   canvas.height = offset + gridHeight;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   const binH = grid.binH;
+  // Root thresholds for alignment hint (start only)
+  if (state.analysisShowRootThreshold !== false) {
+    const rootTrack = (state.analysisTracks || []).find((t) => t.name === "<root>");
+    if (rootTrack && Array.isArray(rootTrack.notes)) {
+      const eps = ROOT_THRESHOLD_SEC;
+      ctx.save();
+      ctx.fillStyle = "rgba(251, 191, 36, 0.10)";
+      ctx.strokeStyle = "rgba(251, 191, 36, 0.35)";
+      rootTrack.notes.forEach((note) => {
+        const s0 = note.start - eps;
+        const s1 = note.start + eps;
+        const leftT = Math.max(state.analysisView.start, Math.min(s0, s1));
+        const rightT = Math.min(state.analysisView.end, Math.max(s0, s1));
+        if (rightT <= state.analysisView.start || leftT >= state.analysisView.end) return;
+        const x0 = timeToX(leftT, width);
+        const x1 = timeToX(rightT, width);
+        const w = Math.max(1, x1 - x0);
+        ctx.fillRect(x0, 0, w, canvas.height);
+        ctx.strokeRect(x0 + 0.5, 0.5, Math.max(0, w - 1), canvas.height - 1);
+      });
+      ctx.restore();
+    }
+  }
   const tracks = getRenderableTracks();
   tracks.forEach((track, idx) => {
     const hue = getTrackHue(idx);
@@ -1411,6 +1436,9 @@ ui.goAnalysis.addEventListener('click', () => {
   showPage('analysis', 'editor-grow');
   drawPiano(ui.analysisPiano);
   setAnalysisTool('pencil');
+  if (ui.analysisRootThresholdToggle) {
+    ui.analysisRootThresholdToggle.checked = state.analysisShowRootThreshold !== false;
+  }
   if (ui.analysisAudioVolume) ui.analysisAudioVolume.value = String(state.analysisAudioVolume ?? 0.8);
   if (ui.analysisNotesVolume) ui.analysisNotesVolume.value = String(state.analysisNotesVolume ?? 0.7);
   if (ui.analysisPreviewVolume) ui.analysisPreviewVolume.value = String(state.analysisPreviewVolume ?? 1);
@@ -1534,6 +1562,13 @@ if (ui.analysisNotesVolume) {
 if (ui.analysisPreviewVolume) {
   ui.analysisPreviewVolume.addEventListener('input', () => {
     state.analysisPreviewVolume = parseFloat(ui.analysisPreviewVolume.value || '1');
+  });
+}
+
+if (ui.analysisRootThresholdToggle) {
+  ui.analysisRootThresholdToggle.addEventListener('change', () => {
+    state.analysisShowRootThreshold = !!ui.analysisRootThresholdToggle.checked;
+    drawAnalysisNotes();
   });
 }
 
