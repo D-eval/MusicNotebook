@@ -534,8 +534,8 @@ async function savePlaylists() {
   );
 }
 
-async function readSongCommentLength(songFolderName) {
-  if (!state.saveDirectoryHandle) return 0;
+async function readSongStats(songFolderName) {
+  if (!state.saveDirectoryHandle) return { commentLen: 0, noteCount: 0 };
   try {
     const dirHandle = await state.saveDirectoryHandle.getDirectoryHandle(songFolderName);
     const notesHandle = await dirHandle.getFileHandle('notes.json');
@@ -544,9 +544,10 @@ async function readSongCommentLength(songFolderName) {
     const noteTextLen = Array.isArray(parsed?.notes)
       ? parsed.notes.reduce((sum, n) => sum + (typeof n?.caption === 'string' ? n.caption.length : 0), 0)
       : 0;
-    return songText.length + noteTextLen;
+    const noteCount = Array.isArray(parsed?.notes) ? parsed.notes.length : 0;
+    return { commentLen: songText.length + noteTextLen, noteCount };
   } catch {
-    return 0;
+    return { commentLen: 0, noteCount: 0 };
   }
 }
 
@@ -688,11 +689,11 @@ async function refreshTocList() {
     const openBtn = document.createElement('button');
     openBtn.type = 'button';
     openBtn.className = 'toc-item name-btn';
-    const commentLen = await readSongCommentLength(songName);
+    const { commentLen, noteCount } = await readSongStats(songName);
     openBtn.textContent = songName;
     const meta = document.createElement('span');
     meta.className = 'toc-meta';
-    meta.textContent = `${commentLen}字`;
+    meta.textContent = `${commentLen}字 · ${noteCount}事件`;
     openBtn.addEventListener('click', async () => {
       const dirHandle = await state.saveDirectoryHandle.getDirectoryHandle(songName);
       await openNotesFromDirectoryHandle(dirHandle);

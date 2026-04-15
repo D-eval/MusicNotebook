@@ -889,6 +889,40 @@ function renderAnalysisTracks() {
       drawAnalysisNotes();
     });
 
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'ghost track-toggle';
+    copyBtn.textContent = '复';
+    copyBtn.addEventListener('click', () => {
+      const existing = new Set(state.analysisTracks.map((t) => t.name));
+      const baseName = track.name || `音色${idx + 1}`;
+      let nextName = `${baseName}_copy`;
+      let n = 2;
+      while (existing.has(nextName)) {
+        nextName = `${baseName}_copy${n++}`;
+      }
+      const copied = {
+        id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
+        name: nextName,
+        type: track.type === 'transient' ? 'transient' : 'pitch',
+        muted: !!track.muted,
+        solo: !!track.solo,
+        notes: Array.isArray(track.notes)
+          ? track.notes.map((note) => ({
+              id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
+              start: Number(note.start) || 0,
+              end: Number(note.end) || 0,
+              midi: Number(note.midi) || 60,
+              velocity: clamp(Number(note.velocity ?? 0.7), 0, 1)
+            }))
+          : []
+      };
+      state.analysisTracks.push(copied);
+      setActiveAnalysisTrack(copied.id);
+      renderAnalysisTracks();
+      drawAnalysisNotes();
+    });
+
     const deleteBtn = document.createElement('button');
     deleteBtn.type = 'button';
     deleteBtn.className = 'ghost track-toggle';
@@ -913,6 +947,7 @@ function renderAnalysisTracks() {
     item.appendChild(typeSelect);
     item.appendChild(muteBtn);
     item.appendChild(soloBtn);
+    item.appendChild(copyBtn);
     item.appendChild(deleteBtn);
     ui.analysisTrackList.appendChild(item);
   });
