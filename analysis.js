@@ -69,6 +69,7 @@ function clamp(v, min, max) {
 }
 
 const ROOT_THRESHOLD_SEC = 0.05;
+const CREATE_DRAG_DEADZONE_PX = 6;
 
 function buildWindow(windowLen, type) {
   const window = new Float32Array(windowLen);
@@ -1786,6 +1787,8 @@ if (ui.analysisNotes) {
           mode: 'create',
           startX: x,
           startY: y,
+          initialEnd: note.end,
+          deadzonePassed: false,
           lastMidi: note.midi
         };
         drawAnalysisNotes();
@@ -1826,8 +1829,14 @@ if (ui.analysisNotes) {
     const note = track ? track.notes.find((n) => n.id === drag.id) : null;
     if (!note) return;
     if (drag.mode === 'create') {
-      const t = xToTime(x, width);
-      note.end = Math.max(t, note.start + 0.02);
+      const movePx = Math.abs(x - drag.startX);
+      if (!drag.deadzonePassed && movePx <= CREATE_DRAG_DEADZONE_PX) {
+        note.end = Math.max(drag.initialEnd ?? note.end, note.start + 0.02);
+      } else {
+        drag.deadzonePassed = true;
+        const t = xToTime(x, width);
+        note.end = Math.max(t, note.start + 0.02);
+      }
     } else if (drag.mode === 'move') {
       const dt = xToTime(x, width) - xToTime(drag.startX, width);
       const dmidi = yToMidi(y, height) - yToMidi(drag.startY, height);
