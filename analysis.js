@@ -722,7 +722,11 @@ function hitTestNote(x, y, width, height) {
 
 function setAnalysisTool(name) {
   state.analysisTool = name;
-  if (ui.analysisToolSelect) ui.analysisToolSelect.value = name;
+}
+
+function getToolForButton(button) {
+  if (button === 2) return state.analysisRightTool || "select";
+  return state.analysisLeftTool || "pencil";
 }
 
 function showVelocitySlider(note, x, y) {
@@ -889,6 +893,8 @@ function renderAnalysisTracks() {
     deleteBtn.className = 'ghost track-toggle';
     deleteBtn.textContent = '删';
     deleteBtn.addEventListener('click', () => {
+      const ok = window.confirm(`确认删除轨道「${track.name || '未命名'}」吗？`);
+      if (!ok) return;
       const idxToRemove = state.analysisTracks.findIndex((t) => t.id === track.id);
       if (idxToRemove >= 0) {
         state.analysisTracks.splice(idxToRemove, 1);
@@ -1448,7 +1454,8 @@ ui.goAnalysis.addEventListener('click', () => {
   state.analysisShiftDrag = null;
   showPage('analysis', 'editor-grow');
   drawPiano(ui.analysisPiano);
-  setAnalysisTool('pencil');
+    if (ui.analysisLeftToolSelect) ui.analysisLeftToolSelect.value = state.analysisLeftTool || "pencil";
+  if (ui.analysisRightToolSelect) ui.analysisRightToolSelect.value = state.analysisRightTool || "select";
   if (ui.analysisRootThresholdToggle) {
     ui.analysisRootThresholdToggle.checked = state.analysisShowRootThreshold !== false;
   }
@@ -1486,11 +1493,6 @@ if (ui.analysisNotes && window.ResizeObserver) {
   });
   ro.observe(ui.analysisNotes);
   ro.observe(ui.analysisPiano);
-}
-if (ui.analysisToolSelect) {
-  ui.analysisToolSelect.addEventListener('change', () => {
-    setAnalysisTool(ui.analysisToolSelect.value || 'pencil');
-  });
 }
 if (ui.analysisAddTrack) {
   ui.analysisAddTrack.addEventListener('click', () => {
@@ -1676,8 +1678,9 @@ if (ui.analysisNotes) {
     const height = rect.height;
     const offset = getAnalysisYOffset();
     if (y < offset) return;
+    const tool = getToolForButton(evt.button);
     hideVelocitySlider();
-    if (state.analysisTool === 'shift-window') {
+    if (tool === "shift-window") {
       const startTime = xToTime(x, width);
       state.analysisShiftWindow = { start: startTime, end: startTime };
       state.analysisShiftDrag = { startTime };
@@ -1685,27 +1688,24 @@ if (ui.analysisNotes) {
       return;
     }
     const hit = hitTestNote(x, y, width, height);
-    if (evt.button === 2 && hit) {
-      setActiveAnalysisTrack(hit.track.id);
-      state.analysisSelectedId = hit.note.id;
-      state.analysisSelectedTrackId = hit.track.id;
-      showVelocitySlider(hit.note, rect.left + x, rect.top + y - 40);
-      drawAnalysisNotes();
-      return;
-    }
-    if (state.analysisTool === 'eraser') {
+    if (tool === "eraser") {
       if (hit) {
-        setActiveAnalysisTrack(hit.track.id);
-        hit.track.notes.splice(hit.index, 1);
+        const track = state.analysisTracks.find((t) => t.id === hit.track.id);
+        if (track) {
+          track.notes = track.notes.filter((n) => n.id !== hit.note.id);
+        }
+        state.analysisSelectedId = null;
+        state.analysisSelectedTrackId = null;
         drawAnalysisNotes();
       }
       return;
     }
-    if (state.analysisTool === 'select') {
+    if (tool === "select") {
       if (hit) {
         setActiveAnalysisTrack(hit.track.id);
         state.analysisSelectedId = hit.note.id;
         state.analysisSelectedTrackId = hit.track.id;
+        state.analysisLastSustain = Math.max(0.02, hit.note.end - hit.note.start);
         playNotePreview(hit.note.midi, hit.note.velocity, hit.track.type, Math.max(0.06, hit.note.end - hit.note.start));
         const edge = 6;
         let mode = 'move';
@@ -1740,11 +1740,12 @@ if (ui.analysisNotes) {
       }
       return;
     }
-    if (state.analysisTool === 'pencil') {
+    if (tool === "pencil") {
       if (hit) {
         setActiveAnalysisTrack(hit.track.id);
         state.analysisSelectedId = hit.note.id;
         state.analysisSelectedTrackId = hit.track.id;
+        state.analysisLastSustain = Math.max(0.02, hit.note.end - hit.note.start);
         playNotePreview(hit.note.midi, hit.note.velocity, hit.track.type, Math.max(0.06, hit.note.end - hit.note.start));
         const edge = 6;
         let mode = 'move';
@@ -1770,13 +1771,14 @@ if (ui.analysisNotes) {
         const note = {
           id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
           start: startTime,
-          end: startTime + 0.05,
+          end: startTime + (state.analysisLastSustain || 0.2),
           midi,
           velocity: 0.7
         };
         activeTrack.notes.push(note);
         state.analysisSelectedId = note.id;
         state.analysisSelectedTrackId = activeTrack.id;
+        state.analysisLastSustain = Math.max(0.02, note.end - note.start);
         playNotePreview(note.midi, note.velocity, activeTrack.type, Math.max(0.06, note.end - note.start));
         state.analysisDrag = {
           id: note.id,

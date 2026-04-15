@@ -31,8 +31,8 @@ fill，填充音色，slap，glitch，补充节奏，稀疏
 
 <inst>
 piano
-female vocal
-male vocal
+female_vocal
+male_vocal
 string
 bass
 kick
@@ -49,3 +49,12 @@ CM, Cm, C7, CM7...
 for 
 
 <ignore_sustain>
+
+
+<root>
+<chord>
+<tonic>
+限制到1个八度
+
+
+长音高权重，短音低权重
