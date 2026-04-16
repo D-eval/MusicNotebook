@@ -70,6 +70,7 @@ function clamp(v, min, max) {
 
 const ROOT_THRESHOLD_SEC = 0.05;
 const CREATE_DRAG_DEADZONE_PX = 6;
+const TRACK_NAME_PRESETS = ['<root>', '<chord>', '<tonic>'];
 
 function buildWindow(windowLen, type) {
   const window = new Float32Array(windowLen);
@@ -850,13 +851,18 @@ function renderAnalysisTracks() {
     selectBtn.style.borderColor = getTrackColor(idx);
     selectBtn.addEventListener('click', () => setActiveAnalysisTrack(track.id));
 
-    const nameInput = document.createElement('input');
-    nameInput.type = 'text';
-    nameInput.className = 'track-name';
-    nameInput.value = track.name;
-    nameInput.placeholder = '音色描述';
-    nameInput.addEventListener('change', () => {
-      track.name = nameInput.value.trim() || `音色${idx + 1}`;
+    const nameSelect = document.createElement('select');
+    nameSelect.className = 'track-name';
+    const options = Array.from(new Set([...TRACK_NAME_PRESETS, track.name || `音色${idx + 1}`]));
+    options.forEach((name) => {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      nameSelect.appendChild(opt);
+    });
+    nameSelect.value = track.name || `音色${idx + 1}`;
+    nameSelect.addEventListener('change', () => {
+      track.name = nameSelect.value;
     });
 
     const typeSelect = document.createElement('select');
@@ -943,7 +949,7 @@ function renderAnalysisTracks() {
     });
 
     item.appendChild(selectBtn);
-    item.appendChild(nameInput);
+    item.appendChild(nameSelect);
     item.appendChild(typeSelect);
     item.appendChild(muteBtn);
     item.appendChild(soloBtn);
@@ -1533,11 +1539,16 @@ if (ui.analysisNotes && window.ResizeObserver) {
 if (ui.analysisAddTrack) {
   ui.analysisAddTrack.addEventListener('click', () => {
     ensureAnalysisTracks();
-    const name = window.prompt('轨道名称（音色描述）', `音色${state.analysisTracks.length + 1}`);
-    if (name === null) return;
+    const existing = new Set((state.analysisTracks || []).map((t) => t.name));
+    const baseName = TRACK_NAME_PRESETS[0] || `音色${state.analysisTracks.length + 1}`;
+    let nextName = baseName;
+    let n = 2;
+    while (existing.has(nextName)) {
+      nextName = `${baseName}_${n++}`;
+    }
     const track = {
       id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
-      name: name.trim() || `音色${state.analysisTracks.length + 1}`,
+      name: nextName,
       type: 'pitch',
       muted: false,
       solo: false,
