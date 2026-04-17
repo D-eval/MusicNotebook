@@ -24,17 +24,21 @@ import numpy as np
 def save_h5(temp_save_path, chord_stacks, segment_wave, 
             song_name, start, duration, sr):
     """
-    chord_stacks: List[dict]
+    chord_stacks: List[Dict {
+        start: float
+        sustain: float
+        root: int
+        tonic: int
+        chord: List[int] 0~11
+    }] Ne
     segment_wave: (L,)
     """
 
     N = len(chord_stacks)
-
+    # chord (N, 12)
     # -------- 处理 chord（变长 → padding）--------
-    max_len = max(len(c["chord"]) for c in chord_stacks) if N > 0 else 1
 
-    chord_arr = np.zeros((N, max_len), dtype=np.int32)
-    mask_arr = np.zeros((N, max_len), dtype=np.float32)
+    chord_arr = np.zeros((N, 12), dtype=np.int32)
 
     start_arr = np.zeros(N, dtype=np.float32)
     sustain_arr = np.zeros(N, dtype=np.float32)
@@ -42,12 +46,7 @@ def save_h5(temp_save_path, chord_stacks, segment_wave,
     tonic_arr = np.zeros(N, dtype=np.int32)
 
     for i, c in enumerate(chord_stacks):
-        chord = c["chord"]
-
-        l = len(chord)
-        chord_arr[i, :l] = chord
-        mask_arr[i, :l] = 1
-
+        chord_arr[i, c["chord"]] = 1
         start_arr[i] = c["start"]
         sustain_arr[i] = c["sustain"]
         root_arr[i] = c["root"]
@@ -71,7 +70,7 @@ def save_h5(temp_save_path, chord_stacks, segment_wave,
         g.create_dataset("root", data=root_arr)
         g.create_dataset("tonic", data=tonic_arr)
         g.create_dataset("chord", data=chord_arr)
-        g.create_dataset("mask", data=mask_arr)
+
 
 
 
@@ -98,6 +97,7 @@ save_dir.mkdir(parents=True, exist_ok=True)
 
 data_counts = 0
 
+samplerate = 44100
 
 for temp_dir in root_dir.iterdir():
     if not temp_dir.is_dir():
@@ -109,18 +109,18 @@ for temp_dir in root_dir.iterdir():
     wave_path = temp_dir / f"{song_name}.mp3"
 
     try:
-        wave, sr = librosa.load(str(wave_path), sr=None, mono=False)
+        wave, sr = librosa.load(str(wave_path), sr=samplerate, mono=False)
     except Exception as e:
         print(f"⚠️ librosa failed → try ffmpeg: {e}")
         wav_path = convert_to_wav(str(wave_path))
-        wave, sr = librosa.load(str(wav_path), sr=None, mono=False)
+        wave, sr = librosa.load(str(wav_path), sr=samplerate, mono=False)
 
     wave = wave.T  # (C, T) → (T, C)
 
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    wave = wave.mean(-1)
+    # wave = wave.mean(-1)
 
     total_time = wave.shape[0] / sr
 
@@ -131,6 +131,10 @@ for temp_dir in root_dir.iterdir():
         segment_start = data['notes'][segment_idx]['start']
         segment_end = data['notes'][segment_idx]['end']
         segment_duration = segment_end - segment_start
+
+        print(segment_duration)
+        if segment_duration <= 5:
+            continue
 
         segment_start_idx = int(segment_start * sr)
         segment_end_idx = int(segment_end * sr)
@@ -189,16 +193,16 @@ for temp_dir in root_dir.iterdir():
                 "chord": chord, # List int 0~11
             }]
 
-            temp_save_path = save_dir / f"{data_counts}.h5"
+        temp_save_path = save_dir / f"{data_counts}.h5"
 
-            save_h5(temp_save_path,
-                    chord_stacks,
-                    segment_wave,
-                    data['audio'],
-                    segment_start,
-                    segment_duration,
-                    sr)
-            data_counts += 1
+        save_h5(temp_save_path,
+                chord_stacks,
+                segment_wave,
+                data['audio'],
+                segment_start,
+                segment_duration,
+                sr)
+        data_counts += 1
 print("ok")
 
 # [{'root':}]

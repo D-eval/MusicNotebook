@@ -779,42 +779,58 @@ function buildMidiFileBytes() {
   const tempo = 500000;
   const ticksPerSecond = (ppq * 1000000) / tempo;
   const baseStart = state.analysisRange.start || 0;
-  const events = [];
-  state.analysisTracks.forEach((track) => {
+  const toTrackChunk = (trackData) => {
+    const chunk = [0x4d, 0x54, 0x72, 0x6b];
+    const len = trackData.length;
+    chunk.push((len >> 24) & 0xff, (len >> 16) & 0xff, (len >> 8) & 0xff, len & 0xff);
+    return chunk;
+  };
+
+  // Track 0: global tempo/meta
+  const tracksData = [[0x00, 0xff, 0x51, 0x03, 0x07, 0xa1, 0x20, 0x00, 0xff, 0x2f, 0x00]];
+
+  // Following tracks: one MIDI track per analysis track
+  state.analysisTracks.forEach((track, idx) => {
+    const events = [];
+    const safeChannel = idx % 16;
     track.notes.forEach((note) => {
       const startSec = Math.max(0, note.start - baseStart);
       const endSec = Math.max(startSec + 0.01, note.end - baseStart);
       const startTick = Math.round(startSec * ticksPerSecond);
       const endTick = Math.round(endSec * ticksPerSecond);
       const vel = clamp(Math.round((note.velocity ?? 0.7) * 127), 1, 127);
-      const midi = Math.round(note.midi);
-      events.push({ tick: startTick, order: 1, data: [0x90, midi, vel] });
-      events.push({ tick: endTick, order: 0, data: [0x80, midi, 0] });
+      const midi = clamp(Math.round(note.midi), 0, 127);
+      events.push({ tick: startTick, order: 1, data: [0x90 | safeChannel, midi, vel] });
+      events.push({ tick: endTick, order: 0, data: [0x80 | safeChannel, midi, 0] });
     });
+    events.sort((a, b) => (a.tick - b.tick) || (a.order - b.order));
+
+    const trackData = [];
+    const name = (track.name || `Track ${idx + 1}`).slice(0, 64);
+    const nameBytes = Array.from(new TextEncoder().encode(name));
+    trackData.push(0x00, 0xff, 0x03, ...encodeVarLen(nameBytes.length), ...nameBytes);
+    let lastTick = 0;
+    events.forEach((evt) => {
+      const delta = evt.tick - lastTick;
+      trackData.push(...encodeVarLen(Math.max(0, delta)), ...evt.data);
+      lastTick = evt.tick;
+    });
+    trackData.push(0x00, 0xff, 0x2f, 0x00);
+    tracksData.push(trackData);
   });
-  events.sort((a, b) => (a.tick - b.tick) || (a.order - b.order));
-  const track = [];
-  track.push(0x00, 0xff, 0x51, 0x03, 0x07, 0xa1, 0x20);
-  let lastTick = 0;
-  events.forEach((evt) => {
-    const delta = evt.tick - lastTick;
-    track.push(...encodeVarLen(Math.max(0, delta)), ...evt.data);
-    lastTick = evt.tick;
-  });
-  track.push(0x00, 0xff, 0x2f, 0x00);
 
   const header = [];
   header.push(0x4d, 0x54, 0x68, 0x64);
   header.push(0x00, 0x00, 0x00, 0x06);
-  header.push(0x00, 0x00, 0x00, 0x01);
+  // Format 1 for multi-track export
+  header.push(0x00, 0x01, (tracksData.length >> 8) & 0xff, tracksData.length & 0xff);
   header.push((ppq >> 8) & 0xff, ppq & 0xff);
 
-  const trackHeader = [];
-  trackHeader.push(0x4d, 0x54, 0x72, 0x6b);
-  const len = track.length;
-  trackHeader.push((len >> 24) & 0xff, (len >> 16) & 0xff, (len >> 8) & 0xff, len & 0xff);
-
-  return new Uint8Array([...header, ...trackHeader, ...track]);
+  const out = [...header];
+  tracksData.forEach((trackData) => {
+    out.push(...toTrackChunk(trackData), ...trackData);
+  });
+  return new Uint8Array(out);
 }
 
 function resizeCanvasToDisplaySize(canvas) {

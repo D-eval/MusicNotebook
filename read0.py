@@ -2,7 +2,7 @@ import torch
 from torch.utils.data import Dataset
 import h5py
 from pathlib import Path
-
+import random
 
 def to_device(batch, device):
     if torch.is_tensor(batch):
@@ -44,30 +44,57 @@ def load_h5(temp_save_path):
         # -------- chord_stacks --------
         g = f["chord_stacks"]
 
-        start_arr = g["start"][:]
-        sustain_arr = g["sustain"][:]
-        root_arr = g["root"][:]
-        tonic_arr = g["tonic"][:]
-        chord_arr = g["chord"][:]
-        mask_arr = g["mask"][:]
+        start_arr = g["start"][:] # (N,)
+        sustain_arr = g["sustain"][:] # (N,)
+        root_arr = g["root"][:] # (N,)
+        tonic_arr = g["tonic"][:] # (N,)
+        chord_arr = g["chord"][:] # (N, 12)
 
         N, K = chord_arr.shape
+        assert K==12
+        
+        target = {
+            "start": start_arr,
+            "sustain": sustain_arr,
+            "root": root_arr,
+            "tonic": tonic_arr,
+            "chord": chord_arr,
+        }
+    # List[ Dict ] * Ne
+    return segment_wave, target, meta
 
-        chord_stacks = []
-        for i in range(N):
-            valid_len = int(mask_arr[i].sum())
+def dict_concat(dict1, dict2):
+    """
+    合并两个 dict，相同 key 对应的值会被合并成 list
+    """
+    result = {}
+    for k, v in dict1.items():
+        assert dict2.get(k) is not None
+        new_v = torch.concat([v, dict2[k]], dim=0)
+        result[k] = new_v
+    return result
 
-            chord = chord_arr[i, :valid_len].tolist()
+def capture_time(target, start_sec, end_sec):
+    valid_bool = (start_sec <= target['start']) * (target['start']<= end_sec)
+    before_bool = (target['start'] < start_sec) *  (start_sec <= target['start'] + target['sustain'])
+    target_valid = {k: torch.tensor(v[valid_bool]) for k, v in target.items()}
+    target_before = {k: torch.tensor(v[before_bool]) for k, v in target.items()}
+    target_valid["before"] = torch.zeros(valid_bool.sum())
+    target_before["before"] = torch.ones(before_bool.sum())
+    target = dict_concat(target_valid, target_before)
+    target['start'] -= start_sec
+    return target
 
-            chord_stacks.append({
-                "start": float(start_arr[i]),
-                "sustain": float(sustain_arr[i]),
-                "root": int(root_arr[i]),
-                "tonic": int(tonic_arr[i]),
-                "chord": chord
-            })
-
-    return segment_wave, chord_stacks, meta
+def cut_sample(wav, target, sr, start=None, duration=5):
+    T = wav.shape[0]
+    L = int(duration * sr)
+    assert T>=L, f"got {T}, sec:{T/sr}"
+    start_idx = random.randint(0, T - L -1) if start is None else int(start * sr)
+    end_idx = start_idx + L
+    assert end_idx <= T-1
+    wav_cut = wav[start_idx:end_idx]
+    target_cut = capture_time(target, start_idx / sr, end_idx / sr)
+    return wav_cut, target_cut
 
 
 import torch
@@ -76,28 +103,15 @@ def collate_fn(batch):
     audios = []
     targets = []
 
-    lengths = []
-
     # -------- 收集 --------
     for audio, target in batch:
         audio = torch.as_tensor(audio, dtype=torch.float32)
         audios.append(audio)
         targets.append(target)
-        lengths.append(audio.shape[0])
-
-    # -------- padding --------
-    max_len = max(lengths)
-    B = len(audios)
-
-    padded_audios = torch.zeros(B, max_len, dtype=torch.float32)
-    valid_mask = torch.zeros(B, max_len, dtype=torch.bool)
-
-    for i, audio in enumerate(audios):
-        L = audio.shape[0]
-        padded_audios[i, :L] = audio
-        valid_mask[i, :L] = 1
-
-    return padded_audios, targets, valid_mask
+    
+    audios = torch.stack(audios, dim=0)
+    # List[ List [ Dict ] Ne ] B
+    return audios, targets
 
 
 # 数据要经过 preprocess0.py 的加工
@@ -112,6 +126,7 @@ class AudioDataset(Dataset):
         h5_path = self.paths[idx]
 
         audio, target, meta = load_h5(h5_path)
+        audio, target = cut_sample(audio, target, meta["samplerate"])
         
         return audio, target
     
@@ -175,7 +190,7 @@ class AudioDataset(Dataset):
 #     pin_memory=True
 # )
 
-# for audios, targets, valid_mask in loader:
+# for audios, targets in loader:
 #     # audios: (B, T)
 #     # targets: list[dict]
-#     print(valid_mask.shape)
+#     print(audios.shape)
