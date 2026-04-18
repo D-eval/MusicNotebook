@@ -102,6 +102,8 @@ samplerate = 44100
 for temp_dir in root_dir.iterdir():
     if not temp_dir.is_dir():
         continue
+    if ".git" in str(temp_dir):
+        continue
 
     song_name = temp_dir.name
 

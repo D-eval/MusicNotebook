@@ -11,9 +11,6 @@ def to_device(batch, device):
         return {
             k: to_device(v, device)
             for k, v in batch.items()
-            if k != "text_ori"  # ⚠️ 非 tensor 跳过
-        } | {
-            "text_ori": batch["text_ori"]
         }
     elif isinstance(batch, list):
         return [to_device(x, device) for x in batch]
@@ -127,6 +124,10 @@ class AudioDataset(Dataset):
 
         audio, target, meta = load_h5(h5_path)
         audio, target = cut_sample(audio, target, meta["samplerate"])
+        audio = torch.tensor(audio)
+        audio_sum = audio.mean(-1)
+        audio_minus = 0.5 * (audio[...,1] - audio[...,0])
+        audio = torch.stack([audio_sum, audio_minus], dim=-1)
         
         return audio, target
     
