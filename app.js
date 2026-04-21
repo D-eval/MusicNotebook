@@ -757,10 +757,19 @@ async function importPlaylistFolder() {
   const playlistName = asked.trim() || suggested;
 
   const playlist = getOrCreatePlaylist(playlistName);
+  const allSongs = new Set(state.playlists.flatMap((p) => p.songs || []));
+  let importedCount = 0;
+  let skippedCount = 0;
   for await (const entry of importDir.values()) {
     if (entry.kind !== 'file' || !isAudioFileName(entry.name)) continue;
     const audioFile = await entry.getFile();
     const base = sanitizeFolderName(stripExtension(entry.name));
+    const sameSongRegex = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:_\\d+)?$`);
+    const existsInOtherPlaylist = Array.from(allSongs).some((name) => sameSongRegex.test(name));
+    if (existsInOtherPlaylist) {
+      skippedCount += 1;
+      continue;
+    }
     let folder = base;
     let n = 2;
     while (true) {
@@ -787,10 +796,13 @@ async function importPlaylistFolder() {
       songDir
     );
     if (!playlist.songs.includes(folder)) playlist.songs.push(folder);
+    allSongs.add(folder);
+    importedCount += 1;
   }
   state.selectedPlaylist = playlist.name;
   await savePlaylists();
   await refreshTocList();
+  alert(`导入完成：新增 ${importedCount} 首，跳过 ${skippedCount} 首（其他歌单已存在）`);
 }
 
 async function writeBlobToDirectory(blob, filename, dirHandle = state.saveDirectoryHandle) {
