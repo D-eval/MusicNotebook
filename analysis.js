@@ -68,12 +68,13 @@ function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
 
-const ROOT_THRESHOLD_SEC = 0.05;
+const ROOT_THRESHOLD_SEC = 0.01;
 const CREATE_DRAG_DEADZONE_PX = 6;
-const TRACK_NAME_PRESETS = ['<root>', '<chord>', '<tonic>', '<beat_strong>', '<beat_weak>'];
+const TRACK_NAME_PRESETS = ['<root>', '<chord>', '<tonic>', '<beat>',
+  "<atomsphere>",
+];
 const DEFAULT_ANALYSIS_TRACKS = [
-  { name: '<beat_strong>', type: 'transient' },
-  { name: '<beat_weak>', type: 'transient' },
+  { name: '<beat>', type: 'transient' },
   { name: '<root>', type: 'pitch' },
   { name: '<chord>', type: 'pitch' },
   { name: '<tonic>', type: 'pitch' }
@@ -518,8 +519,15 @@ function midiToY(midi, height) {
 }
 
 function getBeatClassName(trackName) {
-  const m = /^<beat_(.+)>$/.exec(trackName || '');
-  return m ? m[1] : 'default';
+  const name = (trackName || '').trim();
+  if (name === '<beat>') return 'default';
+  const m = /^<beat_(.+)>$/.exec(name);
+  return m ? m[1] : null;
+}
+
+function isBeatTrackName(trackName) {
+  const name = (trackName || '').trim();
+  return name === '<beat>' || /^<beat_(.+)>$/.test(name);
 }
 
 function getBeatClassColor(cls) {
@@ -551,7 +559,7 @@ function drawAnalysisNotes() {
   // Beat thresholds for alignment hint (start only)
   if (state.analysisShowRootThreshold !== false) {
     const beatTracks = (state.analysisTracks || []).filter(
-      (t) => t && typeof t.name === 'string' && t.name.startsWith('<beat_')
+      (t) => t && typeof t.name === 'string' && isBeatTrackName(t.name)
     );
     if (beatTracks.length) {
       const eps = ROOT_THRESHOLD_SEC;
@@ -944,7 +952,7 @@ function renderAnalysisTracks() {
       } else {
         track.name = nameSelect.value;
       }
-      if (track.name.startsWith('<beat_')) {
+      if (isBeatTrackName(track.name)) {
         track.type = 'transient';
         typeSelect.value = 'transient';
       }
@@ -1639,7 +1647,7 @@ if (ui.analysisAddTrack) {
     const track = {
       id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
       name: nextName,
-      type: nextName.startsWith('<beat_') ? 'silent' : 'pitch',
+      type: isBeatTrackName(nextName) ? 'silent' : 'pitch',
       muted: false,
       solo: false,
       notes: []
