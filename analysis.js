@@ -53,6 +53,7 @@ function drawPiano(canvas) {
   ctx.fillRect(0, 0, width, height);
 
   const blackSet = new Set([1, 3, 6, 8, 10]);
+  const pitchNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
   freqs.forEach((item, idx) => {
     const y = offset + grid.yForIndex(idx);
     const note = item.midi % 12;
@@ -61,6 +62,27 @@ function drawPiano(canvas) {
     ctx.fillRect(0, y, isBlack ? width * 0.7 : width, grid.binH);
     ctx.strokeStyle = 'rgba(120, 75, 40, 0.2)';
     ctx.strokeRect(0, y, width, grid.binH);
+
+    // Label each piano key with note name + frequency (Hz).
+    const octave = Math.floor(item.midi / 12) - 1;
+    const noteName = `${pitchNames[note]}${octave}`;
+    const hzLabel = `${item.freq.toFixed(1)} Hz`;
+    const textColor = isBlack ? 'rgba(255,245,220,0.95)' : 'rgba(60,38,24,0.92)';
+    const labelX = Math.max(6, Math.floor(width * 0.08));
+    const centerY = y + grid.binH * 0.5;
+    const fontSize = clamp(Math.floor(grid.binH * 0.32), 9, 14);
+    ctx.fillStyle = textColor;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    if (grid.binH >= 18) {
+      ctx.font = `600 ${fontSize}px "STKaiti", "KaiTi", serif`;
+      ctx.fillText(noteName, labelX, centerY - fontSize * 0.5);
+      ctx.font = `500 ${Math.max(8, fontSize - 1)}px "STKaiti", "KaiTi", serif`;
+      ctx.fillText(hzLabel, labelX, centerY + fontSize * 0.45);
+    } else {
+      ctx.font = `500 ${Math.max(8, fontSize - 1)}px "STKaiti", "KaiTi", serif`;
+      ctx.fillText(hzLabel, labelX, centerY);
+    }
   });
 }
 
@@ -68,7 +90,7 @@ function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
 
-const ROOT_THRESHOLD_SEC = 0.01;
+const ROOT_THRESHOLD_SEC = 0.05;
 const CREATE_DRAG_DEADZONE_PX = 6;
 const TRACK_NAME_PRESETS = ['<root>', '<chord>', '<tonic>', '<beat>',
   "<atomsphere>",
@@ -425,6 +447,14 @@ function loadAnalysisNotesForTarget() {
   } else {
     state.analysisTracks = [];
   }
+  const metro = stored?.analysisMetronome || state.pendingAnalysisMetronome || null;
+  state.analysisMetronomeBpm = Math.max(1, Math.round(Number(metro?.bpm ?? state.analysisMetronomeBpm ?? 120) || 120));
+  state.analysisMetronomeOffset = Number(metro?.offset ?? state.analysisMetronomeOffset ?? 0) || 0;
+  state.analysisMetronomeMuted = !!metro?.muted;
+  state.analysisMetronomeSolo = !!metro?.solo;
+  if (ui.analysisMetronomeBpm) ui.analysisMetronomeBpm.value = String(state.analysisMetronomeBpm);
+  if (ui.analysisMetronomeOffset) ui.analysisMetronomeOffset.value = String(state.analysisMetronomeOffset);
+  updateMetronomeToggleUI();
   ensureAnalysisTracks();
   setActiveAnalysisTrack(state.analysisActiveTrackId);
 }
@@ -432,13 +462,22 @@ function loadAnalysisNotesForTarget() {
 function persistAnalysisNotesToTarget() {
   const baseStart = state.analysisRange.start || 0;
   const relTracks = state.analysisTracks.map((t) => serializeTrackToRel(t, baseStart));
+  const metronome = {
+    bpm: Math.max(1, Math.round(Number(state.analysisMetronomeBpm ?? 120) || 120)),
+    offset: Number(state.analysisMetronomeOffset ?? 0) || 0,
+    muted: !!state.analysisMetronomeMuted,
+    solo: !!state.analysisMetronomeSolo
+  };
   if (state.analysisTargetIndex !== null && state.notes[state.analysisTargetIndex]) {
     state.notes[state.analysisTargetIndex].analysisTracks = relTracks;
     state.notes[state.analysisTargetIndex].analysisNotes = null;
+    state.notes[state.analysisTargetIndex].analysisMetronome = metronome;
     state.pendingAnalysisTracks = relTracks;
+    state.pendingAnalysisMetronome = metronome;
     return;
   }
   state.pendingAnalysisTracks = relTracks;
+  state.pendingAnalysisMetronome = metronome;
 }
 
 function setAnalysisView(start, end) {
@@ -542,6 +581,41 @@ function getBeatClassColor(cls) {
   };
 }
 
+function drawAnalysisMetronomeGrid(ctx, width, height) {
+  const bpm = Math.max(1, Math.round(Number(state.analysisMetronomeBpm) || 120));
+  const offset = Number(state.analysisMetronomeOffset) || 0;
+  const beatSec = 60 / bpm;
+  if (!Number.isFinite(beatSec) || beatSec <= 0) return;
+  const viewStart = state.analysisView.start;
+  const viewEnd = state.analysisView.end;
+  const count = Math.max(0, Math.floor((viewEnd - viewStart) / beatSec) + 2);
+  if (count <= 0) return;
+  const step = count > 1000 ? Math.ceil(count / 1000) : 1;
+  let beatIndex = Math.floor((viewStart - offset) / beatSec);
+  let t = offset + beatIndex * beatSec;
+  if (t < viewStart) {
+    beatIndex += 1;
+    t += beatSec;
+  }
+  const yStart = getAnalysisYOffset();
+  ctx.save();
+  while (t <= viewEnd) {
+    if ((beatIndex % step) === 0) {
+      const x = timeToX(t, width);
+      const strong = ((((beatIndex % 4) + 4) % 4) === 0);
+      ctx.strokeStyle = strong ? 'rgba(255, 214, 102, 0.9)' : 'rgba(255, 238, 191, 0.72)';
+      ctx.lineWidth = strong ? 2 : 1.25;
+      ctx.beginPath();
+      ctx.moveTo(x, yStart);
+      ctx.lineTo(x, height);
+      ctx.stroke();
+    }
+    beatIndex += 1;
+    t += beatSec;
+  }
+  ctx.restore();
+}
+
 function drawAnalysisNotes() {
   if (!ui.analysisNotes) return;
   const canvas = ui.analysisNotes;
@@ -555,6 +629,7 @@ function drawAnalysisNotes() {
   canvas.width = width;
   canvas.height = offset + gridHeight;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  drawAnalysisMetronomeGrid(ctx, width, canvas.height);
   const binH = grid.binH;
   // Beat thresholds for alignment hint (start only)
   if (state.analysisShowRootThreshold !== false) {
@@ -667,10 +742,97 @@ function applyAnalysisSynthVolume() {
   if (state.analysisSynth && state.analysisSynth.master) {
     state.analysisSynth.master.gain.value = clampVolume(state.analysisNotesVolume ?? 0.7, 0, 1);
   }
+  if (state.analysisMetronome && state.analysisMetronome.master) {
+    state.analysisMetronome.master.gain.value = clampVolume(state.analysisNotesVolume ?? 0.7, 0, 1);
+  }
 }
 
 function getAnalysisPreviewVolume() {
   return clampVolume(state.analysisPreviewVolume ?? 1, 0, 2);
+}
+
+function stopAnalysisMetronome() {
+  const metro = state.analysisMetronome;
+  if (!metro) return;
+  if (metro.timer) clearInterval(metro.timer);
+  try {
+    metro.ctx.close();
+  } catch {}
+  state.analysisMetronome = null;
+}
+
+function updateMetronomeToggleUI() {
+  if (ui.analysisMetronomeMute) {
+    ui.analysisMetronomeMute.classList.toggle('active', !!state.analysisMetronomeMuted);
+  }
+  if (ui.analysisMetronomeSolo) {
+    ui.analysisMetronomeSolo.classList.toggle('active', !!state.analysisMetronomeSolo);
+  }
+}
+
+function scheduleMetronomeClick(ctx, when, strong = false) {
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'square';
+  osc.frequency.setValueAtTime(strong ? 1600 : 1100, when);
+  const a = strong ? 0.18 : 0.12;
+  gain.gain.setValueAtTime(0.0001, when);
+  gain.gain.linearRampToValueAtTime(a, when + 0.002);
+  gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.05);
+  return { osc, gain };
+}
+
+function startAnalysisMetronome() {
+  if (!state.analysisAudio || state.analysisAudio.paused) return;
+  if (state.analysisMetronomeMuted) return;
+  stopAnalysisMetronome();
+  const bpm = Math.max(1, Math.round(Number(state.analysisMetronomeBpm) || 120));
+  const offset = Number(state.analysisMetronomeOffset) || 0;
+  const beatSec = 60 / bpm;
+  const audioNow = state.analysisAudio.currentTime || 0;
+  let beatIndex = Math.ceil((audioNow - offset) / beatSec);
+  if (!Number.isFinite(beatIndex)) beatIndex = 0;
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const master = ctx.createGain();
+  master.gain.value = clampVolume(state.analysisNotesVolume ?? 0.7, 0, 1);
+  master.connect(ctx.destination);
+  const metro = {
+    ctx,
+    master,
+    bpm,
+    offset,
+    beatSec,
+    beatIndex,
+    timer: null
+  };
+  const scheduleAhead = 0.2;
+  metro.timer = setInterval(() => {
+    if (!state.analysisAudio || state.analysisAudio.paused) return;
+    const tAudio = state.analysisAudio.currentTime || 0;
+    while (offset + metro.beatIndex * beatSec <= tAudio + scheduleAhead) {
+      const beatTime = offset + metro.beatIndex * beatSec;
+      if (beatTime >= state.analysisRange.start && beatTime <= state.analysisRange.end) {
+        const delay = beatTime - tAudio;
+        const when = metro.ctx.currentTime + Math.max(0, delay);
+        const strong = metro.beatIndex % 4 === 0;
+        const click = scheduleMetronomeClick(metro.ctx, when, strong);
+        click.osc.connect(click.gain).connect(master);
+        click.osc.start(when);
+        click.osc.stop(when + 0.06);
+      }
+      metro.beatIndex += 1;
+    }
+  }, 25);
+  state.analysisMetronome = metro;
+}
+
+function refreshAnalysisMetronomeIfPlaying() {
+  if (!state.analysisAudio || state.analysisAudio.paused) return;
+  if (state.analysisMetronomeMuted) {
+    stopAnalysisMetronome();
+    return;
+  }
+  startAnalysisMetronome();
 }
 
 function ensureAnalysisAudio() {
@@ -686,12 +848,14 @@ function ensureAnalysisAudio() {
       audio.pause();
       audio.currentTime = state.analysisRange.end;
       stopAnalysisSynth();
+      stopAnalysisMetronome();
       if (ui.analysisPlay) ui.analysisPlay.textContent = '播放';
     }
   });
   audio.addEventListener('ended', () => {
     if (state.analysisAudio !== audio) return;
     stopAnalysisSynth();
+    stopAnalysisMetronome();
     if (ui.analysisPlay) ui.analysisPlay.textContent = '播放';
   });
 }
@@ -714,6 +878,7 @@ function setAnalysisAudioSource() {
 
 function resetAnalysisAudio() {
   if (!state.analysisAudio) return;
+  stopAnalysisMetronome();
   try {
     state.analysisAudio.pause();
   } catch {}
@@ -811,6 +976,261 @@ function encodeVarLen(value) {
     else break;
   }
   return out;
+}
+
+function readVarLen(bytes, posRef) {
+  let value = 0;
+  let byte = 0;
+  do {
+    if (posRef.i >= bytes.length) throw new Error('MIDI 文件损坏：VLQ越界');
+    byte = bytes[posRef.i++];
+    value = (value << 7) | (byte & 0x7f);
+  } while (byte & 0x80);
+  return value;
+}
+
+function decodeMidiText(bytes) {
+  if (!bytes || !bytes.length) return '';
+  try {
+    return new TextDecoder('utf-8').decode(bytes).replace(/\0/g, '').trim();
+  } catch (_) {
+    let out = '';
+    for (let i = 0; i < bytes.length; i += 1) out += String.fromCharCode(bytes[i]);
+    return out.replace(/\0/g, '').trim();
+  }
+}
+
+function parseMidiTrack(trackBytes) {
+  const posRef = { i: 0 };
+  let absTick = 0;
+  let runningStatus = 0;
+  let trackName = '';
+  const events = [];
+  const tempos = [];
+  while (posRef.i < trackBytes.length) {
+    const delta = readVarLen(trackBytes, posRef);
+    absTick += delta;
+    if (posRef.i >= trackBytes.length) break;
+    let status = trackBytes[posRef.i++];
+    if (status < 0x80) {
+      if (!runningStatus) throw new Error('MIDI 文件损坏：running status 无效');
+      posRef.i -= 1;
+      status = runningStatus;
+    } else {
+      runningStatus = status;
+    }
+
+    if (status === 0xff) {
+      runningStatus = 0;
+      if (posRef.i >= trackBytes.length) break;
+      const type = trackBytes[posRef.i++];
+      const len = readVarLen(trackBytes, posRef);
+      const end = Math.min(trackBytes.length, posRef.i + len);
+      const payload = trackBytes.slice(posRef.i, end);
+      posRef.i = end;
+      if (type === 0x03) {
+        trackName = decodeMidiText(payload) || trackName;
+      } else if (type === 0x51 && payload.length >= 3) {
+        const mpq = (payload[0] << 16) | (payload[1] << 8) | payload[2];
+        if (mpq > 0) tempos.push({ tick: absTick, mpq });
+      } else if (type === 0x2f) {
+        break;
+      }
+      continue;
+    }
+    if (status === 0xf0 || status === 0xf7) {
+      runningStatus = 0;
+      const len = readVarLen(trackBytes, posRef);
+      posRef.i = Math.min(trackBytes.length, posRef.i + len);
+      continue;
+    }
+
+    const code = status & 0xf0;
+    const channel = status & 0x0f;
+    const d1 = posRef.i < trackBytes.length ? trackBytes[posRef.i++] : 0;
+    const d2 = (code === 0xc0 || code === 0xd0)
+      ? 0
+      : (posRef.i < trackBytes.length ? trackBytes[posRef.i++] : 0);
+    if (code === 0x90) {
+      if (d2 === 0) events.push({ kind: 'off', tick: absTick, channel, midi: d1 });
+      else events.push({ kind: 'on', tick: absTick, channel, midi: d1, velocity: d2 / 127 });
+    } else if (code === 0x80) {
+      events.push({ kind: 'off', tick: absTick, channel, midi: d1 });
+    }
+  }
+  return { name: trackName, events, tempos };
+}
+
+function parseMidiFile(arrayBuffer) {
+  const bytes = new Uint8Array(arrayBuffer);
+  if (bytes.length < 14) throw new Error('MIDI 文件太短');
+  if (String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]) !== 'MThd') {
+    throw new Error('不是有效的 MIDI 文件（缺少 MThd）');
+  }
+  const headerLen = (bytes[4] << 24) | (bytes[5] << 16) | (bytes[6] << 8) | bytes[7];
+  const format = (bytes[8] << 8) | bytes[9];
+  const trackCount = (bytes[10] << 8) | bytes[11];
+  const division = (bytes[12] << 8) | bytes[13];
+  if (division & 0x8000) throw new Error('暂不支持 SMPTE 时间基 MIDI');
+  const ppq = division || 480;
+  let pos = 8 + headerLen;
+  const tracks = [];
+  for (let t = 0; t < trackCount && pos + 8 <= bytes.length; t += 1) {
+    const id = String.fromCharCode(bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]);
+    const len = (bytes[pos + 4] << 24) | (bytes[pos + 5] << 16) | (bytes[pos + 6] << 8) | bytes[pos + 7];
+    pos += 8;
+    const end = Math.min(bytes.length, pos + len);
+    if (id === 'MTrk') tracks.push(parseMidiTrack(bytes.slice(pos, end)));
+    pos = end;
+  }
+  return { format, ppq, tracks };
+}
+
+function buildTempoTimeline(parsedMidi) {
+  const ppq = Math.max(1, parsedMidi.ppq || 480);
+  const tempoEvents = [{ tick: 0, mpq: 500000 }];
+  parsedMidi.tracks.forEach((track) => {
+    (track.tempos || []).forEach((evt) => tempoEvents.push(evt));
+  });
+  tempoEvents.sort((a, b) => a.tick - b.tick);
+  const merged = [];
+  tempoEvents.forEach((evt) => {
+    if (!merged.length || merged[merged.length - 1].tick !== evt.tick) merged.push({ ...evt });
+    else merged[merged.length - 1].mpq = evt.mpq;
+  });
+  const points = [{ tick: 0, sec: 0, mpq: merged[0].mpq || 500000 }];
+  let curTick = 0;
+  let curSec = 0;
+  let curMpq = merged[0].mpq || 500000;
+  for (let i = 1; i < merged.length; i += 1) {
+    const evt = merged[i];
+    if (evt.tick < curTick) continue;
+    curSec += ((evt.tick - curTick) * curMpq) / (ppq * 1000000);
+    curTick = evt.tick;
+    curMpq = evt.mpq || curMpq;
+    points.push({ tick: curTick, sec: curSec, mpq: curMpq });
+  }
+  const tickToSec = (tick) => {
+    const t = Math.max(0, tick);
+    let lo = 0;
+    let hi = points.length - 1;
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi + 1) / 2);
+      if (points[mid].tick <= t) lo = mid;
+      else hi = mid - 1;
+    }
+    const p = points[lo];
+    return p.sec + ((t - p.tick) * p.mpq) / (ppq * 1000000);
+  };
+  return { tickToSec };
+}
+
+function buildAnalysisTracksFromMidi(parsedMidi) {
+  const { tickToSec } = buildTempoTimeline(parsedMidi);
+  const baseStart = state.analysisRange.start || 0;
+  const created = [];
+  let midiMin = Infinity;
+  let midiMax = -Infinity;
+  let timeMin = Infinity;
+  let timeMax = -Infinity;
+  let unnamed = 1;
+
+  parsedMidi.tracks.forEach((srcTrack) => {
+    const openMap = new Map();
+    const notes = [];
+    (srcTrack.events || []).forEach((evt) => {
+      const key = `${evt.channel}:${evt.midi}`;
+      if (evt.kind === 'on') {
+        const arr = openMap.get(key) || [];
+        arr.push(evt);
+        openMap.set(key, arr);
+      } else if (evt.kind === 'off') {
+        const arr = openMap.get(key);
+        if (!arr || !arr.length) return;
+        const on = arr.shift();
+        const startRel = tickToSec(on.tick);
+        const endRel = tickToSec(evt.tick);
+        const start = baseStart + Math.max(0, startRel);
+        const end = baseStart + Math.max(startRel + 0.02, endRel);
+        const midi = clamp(Math.round(on.midi), 0, 127);
+        const velocity = clamp(on.velocity ?? 0.7, 0.01, 1);
+        notes.push({
+          id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
+          start,
+          end,
+          midi,
+          velocity
+        });
+        midiMin = Math.min(midiMin, midi);
+        midiMax = Math.max(midiMax, midi);
+        timeMin = Math.min(timeMin, start);
+        timeMax = Math.max(timeMax, end);
+      }
+    });
+    if (!notes.length) return;
+    notes.sort((a, b) => a.start - b.start || a.midi - b.midi);
+    const name = (srcTrack.name || '').trim() || `MIDI轨道${unnamed++}`;
+    created.push({
+      id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      name,
+      type: isBeatTrackName(name) ? 'transient' : 'pitch',
+      muted: false,
+      solo: false,
+      notes
+    });
+  });
+
+  return {
+    tracks: created,
+    midiMin: Number.isFinite(midiMin) ? midiMin : null,
+    midiMax: Number.isFinite(midiMax) ? midiMax : null,
+    timeMin: Number.isFinite(timeMin) ? timeMin : null,
+    timeMax: Number.isFinite(timeMax) ? timeMax : null
+  };
+}
+
+async function pickMidiFile() {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.mid,.midi,audio/midi,audio/x-midi';
+    input.style.display = 'none';
+    input.addEventListener('change', () => {
+      const file = input.files && input.files[0] ? input.files[0] : null;
+      input.remove();
+      resolve(file);
+    }, { once: true });
+    document.body.appendChild(input);
+    input.click();
+  });
+}
+
+async function importMidiToAnalysis() {
+  const file = await pickMidiFile();
+  if (!file) return;
+  const parsed = parseMidiFile(await file.arrayBuffer());
+  const built = buildAnalysisTracksFromMidi(parsed);
+  if (!built.tracks.length) throw new Error('该 MIDI 未解析到可用音符');
+  state.analysisTracks = built.tracks;
+  const first = state.analysisTracks[0];
+  state.analysisActiveTrackId = first ? first.id : null;
+  state.analysisSelectedId = null;
+  state.analysisSelectedTrackId = null;
+  state.analysisNotes = first ? first.notes : [];
+  if (built.midiMin !== null && built.midiMax !== null) {
+    const pad = 3;
+    setAnalysisViewY(built.midiMin - pad, built.midiMax + pad);
+  }
+  if (built.timeMin !== null && built.timeMax !== null) {
+    const pad = 0.1;
+    setAnalysisView(built.timeMin - pad, built.timeMax + pad);
+  }
+  renderAnalysisTracks();
+  drawAnalysisNotes();
+  drawAnalysisSpectrogram();
+  drawAnalysisWave();
+  persistAnalysisNotesToTarget();
+  setStatus(`已导入 MIDI：${file.name}（${built.tracks.length} 条轨道）`);
 }
 
 function buildMidiFileBytes() {
@@ -1074,6 +1494,7 @@ state.analysisShowActiveOnly = false;
 
 function playAnalysisNotes(options = {}) {
   stopAnalysisSynth();
+  if (state.analysisMetronomeSolo) return;
   const tracks = getRenderableTracks();
   if (!tracks.length) return;
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -1173,6 +1594,7 @@ function toggleAnalysisPlayback() {
     if (isPlaying) {
       if (state.analysisAudio) state.analysisAudio.pause();
       stopAnalysisSynth();
+      stopAnalysisMetronome();
       if (ui.analysisPlay) ui.analysisPlay.textContent = '播放';
       return;
     }
@@ -1183,6 +1605,7 @@ function toggleAnalysisPlayback() {
       if (ui.analysisPlay) ui.analysisPlay.textContent = '播放';
     });
     playAnalysisNotes({ syncToAudio: true });
+    startAnalysisMetronome();
     if (ui.analysisPlay) ui.analysisPlay.textContent = '暂停';
     return;
   }
@@ -1199,10 +1622,12 @@ function toggleAnalysisPlayback() {
   }
   if (state.analysisAudio.paused) {
     stopAnalysisSynth();
+    stopAnalysisMetronome();
     state.analysisAudio.play().catch(() => {
       setStatus('原音频无法播放（音频源不支持或未就绪）');
       if (ui.analysisPlay) ui.analysisPlay.textContent = '播放';
     });
+    startAnalysisMetronome();
     if (ui.analysisPlay) ui.analysisPlay.textContent = '暂停';
     const tick = () => {
       if (!state.analysisAudio || state.analysisAudio.paused) return;
@@ -1219,6 +1644,7 @@ function toggleAnalysisPlayback() {
     requestAnimationFrame(tick);
   } else {
     state.analysisAudio.pause();
+    stopAnalysisMetronome();
     if (ui.analysisPlay) ui.analysisPlay.textContent = '播放';
   }
 }
@@ -1602,10 +2028,14 @@ ui.goAnalysis.addEventListener('click', () => {
   if (ui.analysisAudioVolume) ui.analysisAudioVolume.value = String(state.analysisAudioVolume ?? 0.8);
   if (ui.analysisNotesVolume) ui.analysisNotesVolume.value = String(state.analysisNotesVolume ?? 0.7);
   if (ui.analysisPreviewVolume) ui.analysisPreviewVolume.value = String(state.analysisPreviewVolume ?? 1);
+  if (ui.analysisMetronomeBpm) ui.analysisMetronomeBpm.value = String(state.analysisMetronomeBpm ?? 120);
+  if (ui.analysisMetronomeOffset) ui.analysisMetronomeOffset.value = String(state.analysisMetronomeOffset ?? 0);
   applyAnalysisAudioVolume();
   applyAnalysisSynthVolume();
   setAnalysisAudioSource();
   loadAnalysisNotesForTarget();
+  updateMetronomeToggleUI();
+  applyAnalysisAudioVolume();
   renderAnalysisTracks();
   drawAnalysisNotes();
   drawAnalysisSpectrogram();
@@ -1724,6 +2154,46 @@ if (ui.analysisPreviewVolume) {
     state.analysisPreviewVolume = parseFloat(ui.analysisPreviewVolume.value || '1');
   });
 }
+if (ui.analysisMetronomeBpm) {
+  ui.analysisMetronomeBpm.value = String(state.analysisMetronomeBpm ?? 120);
+  ui.analysisMetronomeBpm.addEventListener('input', () => {
+    state.analysisMetronomeBpm = Math.max(1, Math.round(Number(ui.analysisMetronomeBpm.value) || 120));
+    ui.analysisMetronomeBpm.value = String(state.analysisMetronomeBpm);
+    drawAnalysisNotes();
+    refreshAnalysisMetronomeIfPlaying();
+  });
+}
+if (ui.analysisMetronomeOffset) {
+  ui.analysisMetronomeOffset.value = String(state.analysisMetronomeOffset ?? 0);
+  ui.analysisMetronomeOffset.addEventListener('input', () => {
+    state.analysisMetronomeOffset = Number(ui.analysisMetronomeOffset.value) || 0;
+    drawAnalysisNotes();
+    refreshAnalysisMetronomeIfPlaying();
+  });
+}
+if (ui.analysisMetronomeMute) {
+  ui.analysisMetronomeMute.addEventListener('click', () => {
+    state.analysisMetronomeMuted = !state.analysisMetronomeMuted;
+    if (state.analysisMetronomeMuted) {
+      stopAnalysisMetronome();
+    } else {
+      refreshAnalysisMetronomeIfPlaying();
+    }
+    updateMetronomeToggleUI();
+  });
+}
+if (ui.analysisMetronomeSolo) {
+  ui.analysisMetronomeSolo.addEventListener('click', () => {
+    state.analysisMetronomeSolo = !state.analysisMetronomeSolo;
+    if (state.analysisMetronomeSolo && state.analysisSynthPlaying) {
+      stopAnalysisSynth();
+    } else if (!state.analysisMetronomeSolo && state.analysisAudio && !state.analysisAudio.paused) {
+      playAnalysisNotes({ syncToAudio: true });
+    }
+    applyAnalysisAudioVolume();
+    updateMetronomeToggleUI();
+  });
+}
 
 if (ui.analysisRootThresholdToggle) {
   ui.analysisRootThresholdToggle.addEventListener('change', () => {
@@ -1740,6 +2210,16 @@ if (ui.analysisSaveNotes) {
       setStatus('扒谱已保存到 notes.json');
     } else {
       setStatus('扒谱已保存到当前片段（未选择保存目录）');
+    }
+  });
+}
+if (ui.analysisImportMidi) {
+  ui.analysisImportMidi.addEventListener('click', async () => {
+    try {
+      await importMidiToAnalysis();
+    } catch (err) {
+      console.error(err);
+      setStatus(`导入 MIDI 失败：${err?.message || err}`);
     }
   });
 }

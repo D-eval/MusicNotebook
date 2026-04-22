@@ -109,11 +109,16 @@ const ui = {
   analysisAudioVolume: document.getElementById('analysisAudioVolume'),
   analysisNotesVolume: document.getElementById('analysisNotesVolume'),
   analysisPreviewVolume: document.getElementById('analysisPreviewVolume'),
+  analysisMetronomeMute: document.getElementById('analysisMetronomeMute'),
+  analysisMetronomeSolo: document.getElementById('analysisMetronomeSolo'),
+  analysisMetronomeBpm: document.getElementById('analysisMetronomeBpm'),
+  analysisMetronomeOffset: document.getElementById('analysisMetronomeOffset'),
   analysisTimeZoomOut: document.getElementById('analysisTimeZoomOut'),
   analysisTimeZoomIn: document.getElementById('analysisTimeZoomIn'),
   analysisFreqZoomOut: document.getElementById('analysisFreqZoomOut'),
   analysisFreqZoomIn: document.getElementById('analysisFreqZoomIn'),
   analysisSaveNotes: document.getElementById('analysisSaveNotes'),
+  analysisImportMidi: document.getElementById('analysisImportMidi'),
   analysisExportMidi: document.getElementById('analysisExportMidi'),
   analysisAutoShift: document.getElementById('analysisAutoShift'),
   analysisClearShiftWindow: document.getElementById('analysisClearShiftWindow'),
@@ -188,6 +193,7 @@ const state = {
   analysisTargetIndex: null,
   pendingAnalysisNotes: [],
   pendingAnalysisTracks: [],
+  pendingAnalysisMetronome: null,
   analysisDrag: null,
   analysisShiftWindow: null,
   analysisShiftDrag: null,
@@ -201,6 +207,11 @@ const state = {
   analysisAudioVolume: 0.8,
   analysisNotesVolume: 0.7,
   analysisPreviewVolume: 1.0,
+  analysisMetronomeBpm: 120,
+  analysisMetronomeOffset: 0,
+  analysisMetronomeMuted: false,
+  analysisMetronomeSolo: false,
+  analysisMetronome: null,
   isModifierPanning: false,
   panStartX: 0,
   panStartScrollLeft: 0,
@@ -428,13 +439,23 @@ function normalizeNote(note) {
       }
     ];
   }
+  const analysisMetronomeRaw = note?.analysisMetronome && typeof note.analysisMetronome === 'object'
+    ? note.analysisMetronome
+    : null;
+  const analysisMetronome = {
+    bpm: Math.max(1, Math.round(Number(analysisMetronomeRaw?.bpm ?? 120) || 120)),
+    offset: Number(analysisMetronomeRaw?.offset ?? 0) || 0,
+    muted: !!analysisMetronomeRaw?.muted,
+    solo: !!analysisMetronomeRaw?.solo
+  };
   return {
     start,
     end,
     tags: Array.from(new Set(tags)),
     caption: typeof note.caption === 'string' ? note.caption : '',
     annotations,
-    analysisTracks
+    analysisTracks,
+    analysisMetronome
   };
 }
 
@@ -1661,7 +1682,13 @@ function makeNotesJson() {
               velocity: item.velocity ?? 0.7
             })) : []
           }))
-        : []
+        : [],
+      analysisMetronome: {
+        bpm: Math.max(1, Math.round(Number(n?.analysisMetronome?.bpm ?? 120) || 120)),
+        offset: Number(n?.analysisMetronome?.offset ?? 0) || 0,
+        muted: !!n?.analysisMetronome?.muted,
+        solo: !!n?.analysisMetronome?.solo
+      }
     }))
   };
 }
@@ -2429,6 +2456,7 @@ function openEditorWithCurrentRegion() {
   state.pendingAnnotations = [];
   state.pendingAnalysisNotes = [];
   state.pendingAnalysisTracks = [];
+  state.pendingAnalysisMetronome = { bpm: 120, offset: 0, muted: false, solo: false };
   state.editorActiveAnnotationIndex = null;
   state.editingAnnotationIndex = null;
   state.timingEditAnnotationIndex = null;
@@ -2468,6 +2496,12 @@ function openEditorForNoteIndex(index) {
         })) : []
       }))
     : [];
+  state.pendingAnalysisMetronome = {
+    bpm: Math.max(1, Math.round(Number(note?.analysisMetronome?.bpm ?? 120) || 120)),
+    offset: Number(note?.analysisMetronome?.offset ?? 0) || 0,
+    muted: !!note?.analysisMetronome?.muted,
+    solo: !!note?.analysisMetronome?.solo
+  };
   state.editorActiveAnnotationIndex = null;
   state.editingAnnotationIndex = null;
   state.timingEditAnnotationIndex = null;
@@ -2510,7 +2544,13 @@ function saveNoteEntry(nextPage = 'notes') {
             velocity: item.velocity ?? 0.7
           })) : []
         }))
-      : []
+      : [],
+    analysisMetronome: {
+      bpm: Math.max(1, Math.round(Number(state.pendingAnalysisMetronome?.bpm ?? 120) || 120)),
+      offset: Number(state.pendingAnalysisMetronome?.offset ?? 0) || 0,
+      muted: !!state.pendingAnalysisMetronome?.muted,
+      solo: !!state.pendingAnalysisMetronome?.solo
+    }
   };
 
   if (state.editingNoteIndex !== null && state.notes[state.editingNoteIndex]) {
@@ -2524,6 +2564,7 @@ function saveNoteEntry(nextPage = 'notes') {
   state.pendingAnnotations = [];
   state.pendingAnalysisNotes = [];
   state.pendingAnalysisTracks = [];
+  state.pendingAnalysisMetronome = null;
   state.editorActiveAnnotationIndex = null;
   state.timingEditAnnotationIndex = null;
   state.editingAnnotationIndex = null;

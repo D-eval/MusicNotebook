@@ -839,15 +839,68 @@ body {
 
 .analysis-tracks {
   margin-top: 10px;
-  display: flex;
-  align-items: center;
+  display: grid;
   gap: 10px;
   color: #ffffff;
+}
+
+.analysis-track-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   flex-wrap: wrap;
 }
 
 .analysis-track-title {
   font-weight: 600;
+}
+
+.analysis-metronome-panel {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.analysis-metronome-title {
+  color: rgba(255, 255, 255, 0.95);
+  font-weight: 600;
+}
+
+.analysis-metronome-panel label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.analysis-metronome-panel input[type="number"] {
+  width: 96px;
+  margin-top: 0;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: #0b1220;
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+.analysis-metronome-panel .track-toggle {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  line-height: 1;
+  border-radius: 6px;
+  color: #ffffff;
+}
+
+.analysis-metronome-panel .track-toggle.active {
+  background: #1f6feb;
+  color: #ffffff;
 }
 
 .analysis-track-list {

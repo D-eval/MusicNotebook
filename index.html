@@ -184,6 +184,7 @@
               <button id="analysisFreqZoomIn" type="button" class="ghost plain">+</button>
             </div>
             <button id="analysisSaveNotes" type="button" class="ghost plain">保存扒谱</button>
+            <button id="analysisImportMidi" type="button" class="ghost plain">导入MIDI</button>
             <button id="analysisExportMidi" type="button" class="ghost plain">导出MIDI</button>
             <button id="analysisAutoShift" type="button" class="ghost plain">自动移调</button>
             <button id="analysisClearShiftWindow" type="button" class="ghost plain">清除选窗</button>
@@ -216,7 +217,22 @@
           </div>
         </div>
         <div class="analysis-tracks">
-          <span class="analysis-track-title">轨道</span>
+          <div class="analysis-track-head">
+            <span class="analysis-track-title">轨道</span>
+            <div class="analysis-metronome-panel">
+              <span class="analysis-metronome-title">节拍器</span>
+              <button id="analysisMetronomeMute" type="button" class="ghost track-toggle">M</button>
+              <button id="analysisMetronomeSolo" type="button" class="ghost track-toggle">S</button>
+              <label>
+                BPM
+                <input id="analysisMetronomeBpm" type="number" min="20" max="400" step="1" value="120" />
+              </label>
+              <label>
+                Offset(s)
+                <input id="analysisMetronomeOffset" type="number" min="-60" max="60" step="0.01" value="0" />
+              </label>
+            </div>
+          </div>
           <div id="analysisTrackList" class="analysis-track-list"></div>
           <button id="analysisAddTrack" type="button" class="ghost">+ 轨道</button>
         </div>
