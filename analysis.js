@@ -70,7 +70,14 @@ function clamp(v, min, max) {
 
 const ROOT_THRESHOLD_SEC = 0.05;
 const CREATE_DRAG_DEADZONE_PX = 6;
-const TRACK_NAME_PRESETS = ['<root>', '<chord>', '<tonic>'];
+const TRACK_NAME_PRESETS = ['<root>', '<chord>', '<tonic>', '<beat_strong>', '<beat_weak>'];
+const DEFAULT_ANALYSIS_TRACKS = [
+  { name: '<beat_strong>', type: 'transient' },
+  { name: '<beat_weak>', type: 'transient' },
+  { name: '<root>', type: 'pitch' },
+  { name: '<chord>', type: 'pitch' },
+  { name: '<tonic>', type: 'pitch' }
+];
 
 function buildWindow(windowLen, type) {
   const window = new Float32Array(windowLen);
@@ -324,17 +331,17 @@ function ensureAnalysisTracks() {
     state.analysisNotes = track ? track.notes : [];
     return;
   }
-  const track = {
+  state.analysisTracks = DEFAULT_ANALYSIS_TRACKS.map((item) => ({
     id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
-    name: '音色1',
-    type: 'pitch',
+    name: item.name,
+    type: item.type,
     muted: false,
     solo: false,
     notes: []
-  };
-  state.analysisTracks = [track];
-  state.analysisActiveTrackId = track.id;
-  state.analysisNotes = track.notes;
+  }));
+  const first = state.analysisTracks[0];
+  state.analysisActiveTrackId = first ? first.id : null;
+  state.analysisNotes = first ? first.notes : [];
 }
 
 function getRenderableTracks(options = {}) {
@@ -361,7 +368,7 @@ function buildTrackFromRel(source, baseStart, index) {
   const name = typeof source?.name === 'string' && source.name.trim()
     ? source.name.trim()
     : `音色${index + 1}`;
-  const type = source?.type === 'transient' ? 'transient' : 'pitch';
+  const type = source?.type === 'transient' ? 'transient' : source?.type === 'silent' ? 'silent' : 'pitch';
   const list = Array.isArray(source?.notes) ? source.notes : [];
   const notes = list
     .map((item) => {
@@ -510,6 +517,23 @@ function midiToY(midi, height) {
   return offset + grid.yForIndex(idx);
 }
 
+function getBeatClassName(trackName) {
+  const m = /^<beat_(.+)>$/.exec(trackName || '');
+  return m ? m[1] : 'default';
+}
+
+function getBeatClassColor(cls) {
+  let hash = 0;
+  for (let i = 0; i < cls.length; i += 1) {
+    hash = (hash * 31 + cls.charCodeAt(i)) >>> 0;
+  }
+  const hue = hash % 360;
+  return {
+    fill: `hsla(${hue}, 85%, 58%, 0.10)`,
+    stroke: `hsla(${hue}, 85%, 48%, 0.40)`
+  };
+}
+
 function drawAnalysisNotes() {
   if (!ui.analysisNotes) return;
   const canvas = ui.analysisNotes;
@@ -524,25 +548,32 @@ function drawAnalysisNotes() {
   canvas.height = offset + gridHeight;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   const binH = grid.binH;
-  // Root thresholds for alignment hint (start only)
+  // Beat thresholds for alignment hint (start only)
   if (state.analysisShowRootThreshold !== false) {
-    const rootTrack = (state.analysisTracks || []).find((t) => t.name === "<root>");
-    if (rootTrack && Array.isArray(rootTrack.notes)) {
+    const beatTracks = (state.analysisTracks || []).filter(
+      (t) => t && typeof t.name === 'string' && t.name.startsWith('<beat_')
+    );
+    if (beatTracks.length) {
       const eps = ROOT_THRESHOLD_SEC;
       ctx.save();
-      ctx.fillStyle = "rgba(251, 191, 36, 0.10)";
-      ctx.strokeStyle = "rgba(251, 191, 36, 0.35)";
-      rootTrack.notes.forEach((note) => {
-        const s0 = note.start - eps;
-        const s1 = note.start + eps;
-        const leftT = Math.max(state.analysisView.start, Math.min(s0, s1));
-        const rightT = Math.min(state.analysisView.end, Math.max(s0, s1));
-        if (rightT <= state.analysisView.start || leftT >= state.analysisView.end) return;
-        const x0 = timeToX(leftT, width);
-        const x1 = timeToX(rightT, width);
-        const w = Math.max(1, x1 - x0);
-        ctx.fillRect(x0, 0, w, canvas.height);
-        ctx.strokeRect(x0 + 0.5, 0.5, Math.max(0, w - 1), canvas.height - 1);
+      beatTracks.forEach((track) => {
+        if (!Array.isArray(track.notes)) return;
+        const cls = getBeatClassName(track.name);
+        const color = getBeatClassColor(cls);
+        ctx.fillStyle = color.fill;
+        ctx.strokeStyle = color.stroke;
+        track.notes.forEach((note) => {
+          const s0 = note.start - eps;
+          const s1 = note.start + eps;
+          const leftT = Math.max(state.analysisView.start, Math.min(s0, s1));
+          const rightT = Math.min(state.analysisView.end, Math.max(s0, s1));
+          if (rightT <= state.analysisView.start || leftT >= state.analysisView.end) return;
+          const x0 = timeToX(leftT, width);
+          const x1 = timeToX(rightT, width);
+          const w = Math.max(1, x1 - x0);
+          ctx.fillRect(x0, 0, w, canvas.height);
+          ctx.strokeRect(x0 + 0.5, 0.5, Math.max(0, w - 1), canvas.height - 1);
+        });
       });
       ctx.restore();
     }
@@ -854,6 +885,18 @@ function refreshAnalysisLayout() {
 function renderAnalysisTracks() {
   if (!ui.analysisTrackList) return;
   ui.analysisTrackList.innerHTML = '';
+  let presetList = document.getElementById('trackNamePresetList');
+  if (!presetList) {
+    presetList = document.createElement('datalist');
+    presetList.id = 'trackNamePresetList';
+    document.body.appendChild(presetList);
+  }
+  presetList.innerHTML = '';
+  TRACK_NAME_PRESETS.forEach((name) => {
+    const option = document.createElement('option');
+    option.value = name;
+    presetList.appendChild(option);
+  });
   state.analysisTracks.forEach((track, idx) => {
     const item = document.createElement('div');
     item.className = 'analysis-track';
@@ -869,24 +912,53 @@ function renderAnalysisTracks() {
 
     const nameSelect = document.createElement('select');
     nameSelect.className = 'track-name';
-    const options = Array.from(new Set([...TRACK_NAME_PRESETS, track.name || `音色${idx + 1}`]));
-    options.forEach((name) => {
+    const uniqueNames = Array.from(new Set([...TRACK_NAME_PRESETS, track.name || `音色${idx + 1}`]));
+    uniqueNames.forEach((name) => {
       const opt = document.createElement('option');
       opt.value = name;
       opt.textContent = name;
       nameSelect.appendChild(opt);
     });
-    nameSelect.value = track.name || `音色${idx + 1}`;
+    const customOpt = document.createElement('option');
+    customOpt.value = '__custom__';
+    customOpt.textContent = '自定义...';
+    nameSelect.appendChild(customOpt);
+    nameSelect.value = uniqueNames.includes(track.name) ? track.name : (track.name || `音色${idx + 1}`);
     nameSelect.addEventListener('change', () => {
-      track.name = nameSelect.value;
+      if (nameSelect.value === '__custom__') {
+        const asked = window.prompt('输入自定义音色名', track.name || '');
+        if (asked === null) {
+          nameSelect.value = track.name || `音色${idx + 1}`;
+          return;
+        }
+        const nextName = asked.trim() || `音色${idx + 1}`;
+        track.name = nextName;
+        let customExisting = Array.from(nameSelect.options).find((o) => o.value === nextName);
+        if (!customExisting) {
+          customExisting = document.createElement('option');
+          customExisting.value = nextName;
+          customExisting.textContent = nextName;
+          nameSelect.insertBefore(customExisting, customOpt);
+        }
+        nameSelect.value = nextName;
+      } else {
+        track.name = nameSelect.value;
+      }
+      if (track.name.startsWith('<beat_')) {
+        track.type = 'transient';
+        typeSelect.value = 'transient';
+      }
     });
 
     const typeSelect = document.createElement('select');
     typeSelect.className = 'track-type';
-    typeSelect.innerHTML = '<option value="pitch">音高</option><option value="transient">瞬态</option>';
+    typeSelect.innerHTML = '<option value="pitch">音高</option><option value="transient">瞬态</option><option value="silent">无声</option>';
     typeSelect.value = track.type;
     typeSelect.addEventListener('change', () => {
-      track.type = typeSelect.value === 'transient' ? 'transient' : 'pitch';
+      if (typeSelect.value === 'transient') track.type = 'transient';
+      else if (typeSelect.value === 'silent') track.type = 'silent';
+      else track.type = 'pitch';
+      drawAnalysisNotes();
     });
 
     const muteBtn = document.createElement('button');
@@ -926,7 +998,7 @@ function renderAnalysisTracks() {
       const copied = {
         id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
         name: nextName,
-        type: track.type === 'transient' ? 'transient' : 'pitch',
+        type: track.type === 'transient' ? 'transient' : track.type === 'silent' ? 'silent' : 'pitch',
         muted: !!track.muted,
         solo: !!track.solo,
         notes: Array.isArray(track.notes)
@@ -1012,6 +1084,7 @@ function playAnalysisNotes(options = {}) {
   state.analysisSynthStart = performance.now() / 1000;
   state.analysisSynthPlaying = true;
   tracks.forEach((track) => {
+    if (track.type === 'silent') return;
     track.notes.forEach((note) => {
       const start = note.start - playbackStart;
       const end = note.end - playbackStart;
@@ -1143,6 +1216,7 @@ function toggleAnalysisPlayback() {
 }
 
 function playNotePreview(midi, velocity = 0.7, type = 'pitch', duration = 0.12) {
+  if (type === 'silent') return;
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
   const osc = ctx.createOscillator();
   const gain = ctx.createGain();
@@ -1565,7 +1639,7 @@ if (ui.analysisAddTrack) {
     const track = {
       id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
       name: nextName,
-      type: 'pitch',
+      type: nextName.startsWith('<beat_') ? 'silent' : 'pitch',
       muted: false,
       solo: false,
       notes: []
