@@ -91,6 +91,7 @@ function clamp(v, min, max) {
 }
 
 const ROOT_THRESHOLD_SEC = 0.05;
+const BEAT_THRESHOLD_SEC = 0.05;
 const CREATE_DRAG_DEADZONE_PX = 6;
 const TRACK_NAME_PRESETS = ['<root>', '<chord>', '<tonic>', '<beat>',
   "<atomsphere>",
@@ -449,10 +450,12 @@ function loadAnalysisNotesForTarget() {
   }
   const metro = stored?.analysisMetronome || state.pendingAnalysisMetronome || null;
   state.analysisMetronomeBpm = Math.max(1, Math.round(Number(metro?.bpm ?? state.analysisMetronomeBpm ?? 120) || 120));
+  state.analysisMetronomeSignature = normalizeMetronomeSignature(metro?.signature ?? state.analysisMetronomeSignature ?? '4/4');
   state.analysisMetronomeOffset = Number(metro?.offset ?? state.analysisMetronomeOffset ?? 0) || 0;
   state.analysisMetronomeMuted = !!metro?.muted;
   state.analysisMetronomeSolo = !!metro?.solo;
   if (ui.analysisMetronomeBpm) ui.analysisMetronomeBpm.value = String(state.analysisMetronomeBpm);
+  if (ui.analysisMetronomeSignature) ui.analysisMetronomeSignature.value = state.analysisMetronomeSignature;
   if (ui.analysisMetronomeOffset) ui.analysisMetronomeOffset.value = String(state.analysisMetronomeOffset);
   updateMetronomeToggleUI();
   ensureAnalysisTracks();
@@ -464,6 +467,7 @@ function persistAnalysisNotesToTarget() {
   const relTracks = state.analysisTracks.map((t) => serializeTrackToRel(t, baseStart));
   const metronome = {
     bpm: Math.max(1, Math.round(Number(state.analysisMetronomeBpm ?? 120) || 120)),
+    signature: normalizeMetronomeSignature(state.analysisMetronomeSignature ?? '4/4'),
     offset: Number(state.analysisMetronomeOffset ?? 0) || 0,
     muted: !!state.analysisMetronomeMuted,
     solo: !!state.analysisMetronomeSolo
@@ -581,10 +585,26 @@ function getBeatClassColor(cls) {
   };
 }
 
-function drawAnalysisMetronomeGrid(ctx, width, height) {
+function normalizeMetronomeSignature(signature) {
+  const s = String(signature || '').trim();
+  if (s === '4/4' || s === '3/4' || s === '3/8' || s === '1/4') return s;
+  return '4/4';
+}
+
+function getMetronomeMeter() {
+  const signature = normalizeMetronomeSignature(state.analysisMetronomeSignature || '4/4');
+  const [numRaw, denRaw] = signature.split('/');
+  const beatsPerBar = Math.max(1, parseInt(numRaw, 10) || 4);
+  const denominator = Math.max(1, parseInt(denRaw, 10) || 4);
   const bpm = Math.max(1, Math.round(Number(state.analysisMetronomeBpm) || 120));
+  const beatSec = (60 / bpm) * (4 / denominator);
+  return { signature, beatsPerBar, denominator, bpm, beatSec };
+}
+
+function drawAnalysisMetronomeGrid(ctx, width, height) {
+  const meter = getMetronomeMeter();
   const offset = Number(state.analysisMetronomeOffset) || 0;
-  const beatSec = 60 / bpm;
+  const beatSec = meter.beatSec;
   if (!Number.isFinite(beatSec) || beatSec <= 0) return;
   const viewStart = state.analysisView.start;
   const viewEnd = state.analysisView.end;
@@ -602,7 +622,7 @@ function drawAnalysisMetronomeGrid(ctx, width, height) {
   while (t <= viewEnd) {
     if ((beatIndex % step) === 0) {
       const x = timeToX(t, width);
-      const strong = ((((beatIndex % 4) + 4) % 4) === 0);
+      const strong = ((((beatIndex % meter.beatsPerBar) + meter.beatsPerBar) % meter.beatsPerBar) === 0);
       ctx.strokeStyle = strong ? 'rgba(255, 214, 102, 0.9)' : 'rgba(255, 238, 191, 0.72)';
       ctx.lineWidth = strong ? 2 : 1.25;
       ctx.beginPath();
@@ -631,17 +651,45 @@ function drawAnalysisNotes() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawAnalysisMetronomeGrid(ctx, width, canvas.height);
   const binH = grid.binH;
-  // Beat thresholds for alignment hint (start only)
+  // Root thresholds for alignment hint (start only)
   if (state.analysisShowRootThreshold !== false) {
+    const rootTracks = (state.analysisTracks || []).filter(
+      (t) => t && typeof t.name === 'string' && t.name.trim() === '<root>'
+    );
+    if (rootTracks.length) {
+      const eps = ROOT_THRESHOLD_SEC;
+      ctx.save();
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.14)';
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.5)';
+      rootTracks.forEach((track) => {
+        if (!Array.isArray(track.notes)) return;
+        track.notes.forEach((note) => {
+          const s0 = note.start - eps;
+          const s1 = note.start + eps;
+          const leftT = Math.max(state.analysisView.start, Math.min(s0, s1));
+          const rightT = Math.min(state.analysisView.end, Math.max(s0, s1));
+          if (rightT <= state.analysisView.start || leftT >= state.analysisView.end) return;
+          const x0 = timeToX(leftT, width);
+          const x1 = timeToX(rightT, width);
+          const w = Math.max(1, x1 - x0);
+          ctx.fillRect(x0, 0, w, canvas.height);
+          ctx.strokeRect(x0 + 0.5, 0.5, Math.max(0, w - 1), canvas.height - 1);
+        });
+      });
+      ctx.restore();
+    }
+  }
+  // Beat thresholds for alignment hint (start only)
+  if (state.analysisShowBeatThreshold === true) {
     const beatTracks = (state.analysisTracks || []).filter(
       (t) => t && typeof t.name === 'string' && isBeatTrackName(t.name)
     );
     if (beatTracks.length) {
-      const eps = ROOT_THRESHOLD_SEC;
+      const eps = BEAT_THRESHOLD_SEC;
       ctx.save();
       beatTracks.forEach((track) => {
         if (!Array.isArray(track.notes)) return;
-        const cls = getBeatClassName(track.name);
+        const cls = getBeatClassName(track.name) || 'default';
         const color = getBeatClassColor(cls);
         ctx.fillStyle = color.fill;
         ctx.strokeStyle = color.stroke;
@@ -786,9 +834,10 @@ function startAnalysisMetronome() {
   if (!state.analysisAudio || state.analysisAudio.paused) return;
   if (state.analysisMetronomeMuted) return;
   stopAnalysisMetronome();
-  const bpm = Math.max(1, Math.round(Number(state.analysisMetronomeBpm) || 120));
+  const meter = getMetronomeMeter();
+  const bpm = meter.bpm;
   const offset = Number(state.analysisMetronomeOffset) || 0;
-  const beatSec = 60 / bpm;
+  const beatSec = meter.beatSec;
   const audioNow = state.analysisAudio.currentTime || 0;
   let beatIndex = Math.ceil((audioNow - offset) / beatSec);
   if (!Number.isFinite(beatIndex)) beatIndex = 0;
@@ -814,7 +863,7 @@ function startAnalysisMetronome() {
       if (beatTime >= state.analysisRange.start && beatTime <= state.analysisRange.end) {
         const delay = beatTime - tAudio;
         const when = metro.ctx.currentTime + Math.max(0, delay);
-        const strong = metro.beatIndex % 4 === 0;
+        const strong = (metro.beatIndex % meter.beatsPerBar) === 0;
         const click = scheduleMetronomeClick(metro.ctx, when, strong);
         click.osc.connect(click.gain).connect(master);
         click.osc.start(when);
@@ -2025,10 +2074,14 @@ ui.goAnalysis.addEventListener('click', () => {
   if (ui.analysisRootThresholdToggle) {
     ui.analysisRootThresholdToggle.checked = state.analysisShowRootThreshold !== false;
   }
+  if (ui.analysisBeatThresholdToggle) {
+    ui.analysisBeatThresholdToggle.checked = state.analysisShowBeatThreshold === true;
+  }
   if (ui.analysisAudioVolume) ui.analysisAudioVolume.value = String(state.analysisAudioVolume ?? 0.8);
   if (ui.analysisNotesVolume) ui.analysisNotesVolume.value = String(state.analysisNotesVolume ?? 0.7);
   if (ui.analysisPreviewVolume) ui.analysisPreviewVolume.value = String(state.analysisPreviewVolume ?? 1);
   if (ui.analysisMetronomeBpm) ui.analysisMetronomeBpm.value = String(state.analysisMetronomeBpm ?? 120);
+  if (ui.analysisMetronomeSignature) ui.analysisMetronomeSignature.value = normalizeMetronomeSignature(state.analysisMetronomeSignature ?? '4/4');
   if (ui.analysisMetronomeOffset) ui.analysisMetronomeOffset.value = String(state.analysisMetronomeOffset ?? 0);
   applyAnalysisAudioVolume();
   applyAnalysisSynthVolume();
@@ -2163,6 +2216,15 @@ if (ui.analysisMetronomeBpm) {
     refreshAnalysisMetronomeIfPlaying();
   });
 }
+if (ui.analysisMetronomeSignature) {
+  ui.analysisMetronomeSignature.value = normalizeMetronomeSignature(state.analysisMetronomeSignature ?? '4/4');
+  ui.analysisMetronomeSignature.addEventListener('change', () => {
+    state.analysisMetronomeSignature = normalizeMetronomeSignature(ui.analysisMetronomeSignature.value);
+    ui.analysisMetronomeSignature.value = state.analysisMetronomeSignature;
+    drawAnalysisNotes();
+    refreshAnalysisMetronomeIfPlaying();
+  });
+}
 if (ui.analysisMetronomeOffset) {
   ui.analysisMetronomeOffset.value = String(state.analysisMetronomeOffset ?? 0);
   ui.analysisMetronomeOffset.addEventListener('input', () => {
@@ -2198,6 +2260,12 @@ if (ui.analysisMetronomeSolo) {
 if (ui.analysisRootThresholdToggle) {
   ui.analysisRootThresholdToggle.addEventListener('change', () => {
     state.analysisShowRootThreshold = !!ui.analysisRootThresholdToggle.checked;
+    drawAnalysisNotes();
+  });
+}
+if (ui.analysisBeatThresholdToggle) {
+  ui.analysisBeatThresholdToggle.addEventListener('change', () => {
+    state.analysisShowBeatThreshold = !!ui.analysisBeatThresholdToggle.checked;
     drawAnalysisNotes();
   });
 }

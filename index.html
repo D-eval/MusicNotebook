@@ -192,6 +192,10 @@
               <input id="analysisRootThresholdToggle" type="checkbox" checked />
               显示root阈值
             </label>
+            <label class="analysis-toggle">
+              <input id="analysisBeatThresholdToggle" type="checkbox" />
+              显示beat阈值
+            </label>
             <label>
               左键
               <select id="analysisLeftToolSelect">
@@ -226,6 +230,15 @@
               <label>
                 BPM
                 <input id="analysisMetronomeBpm" type="number" min="20" max="400" step="1" value="120" />
+              </label>
+              <label>
+                拍号
+                <select id="analysisMetronomeSignature">
+                  <option value="4/4">4/4</option>
+                  <option value="3/4">3/4</option>
+                  <option value="3/8">3/8</option>
+                  <option value="1/4">1/4</option>
+                </select>
               </label>
               <label>
                 Offset(s)

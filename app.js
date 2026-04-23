@@ -112,6 +112,7 @@ const ui = {
   analysisMetronomeMute: document.getElementById('analysisMetronomeMute'),
   analysisMetronomeSolo: document.getElementById('analysisMetronomeSolo'),
   analysisMetronomeBpm: document.getElementById('analysisMetronomeBpm'),
+  analysisMetronomeSignature: document.getElementById('analysisMetronomeSignature'),
   analysisMetronomeOffset: document.getElementById('analysisMetronomeOffset'),
   analysisTimeZoomOut: document.getElementById('analysisTimeZoomOut'),
   analysisTimeZoomIn: document.getElementById('analysisTimeZoomIn'),
@@ -125,6 +126,7 @@ const ui = {
   analysisLeftToolSelect: document.getElementById('analysisLeftToolSelect'),
   analysisRightToolSelect: document.getElementById('analysisRightToolSelect'),
   analysisRootThresholdToggle: document.getElementById('analysisRootThresholdToggle'),
+  analysisBeatThresholdToggle: document.getElementById('analysisBeatThresholdToggle'),
   analysisTrackList: document.getElementById('analysisTrackList'),
   analysisAddTrack: document.getElementById('analysisAddTrack'),
   analysisShowActiveOnly: document.getElementById('analysisShowActiveOnly'),
@@ -188,6 +190,7 @@ const state = {
   analysisSelectedId: null,
   analysisSelectedTrackId: null,
   analysisShowRootThreshold: true,
+  analysisShowBeatThreshold: false,
   analysisTracks: [],
   analysisActiveTrackId: null,
   analysisTargetIndex: null,
@@ -208,6 +211,7 @@ const state = {
   analysisNotesVolume: 0.7,
   analysisPreviewVolume: 1.0,
   analysisMetronomeBpm: 120,
+  analysisMetronomeSignature: '4/4',
   analysisMetronomeOffset: 0,
   analysisMetronomeMuted: false,
   analysisMetronomeSolo: false,
@@ -444,6 +448,7 @@ function normalizeNote(note) {
     : null;
   const analysisMetronome = {
     bpm: Math.max(1, Math.round(Number(analysisMetronomeRaw?.bpm ?? 120) || 120)),
+    signature: typeof analysisMetronomeRaw?.signature === 'string' ? analysisMetronomeRaw.signature : '4/4',
     offset: Number(analysisMetronomeRaw?.offset ?? 0) || 0,
     muted: !!analysisMetronomeRaw?.muted,
     solo: !!analysisMetronomeRaw?.solo
@@ -1685,6 +1690,7 @@ function makeNotesJson() {
         : [],
       analysisMetronome: {
         bpm: Math.max(1, Math.round(Number(n?.analysisMetronome?.bpm ?? 120) || 120)),
+        signature: typeof n?.analysisMetronome?.signature === 'string' ? n.analysisMetronome.signature : '4/4',
         offset: Number(n?.analysisMetronome?.offset ?? 0) || 0,
         muted: !!n?.analysisMetronome?.muted,
         solo: !!n?.analysisMetronome?.solo
@@ -2456,7 +2462,7 @@ function openEditorWithCurrentRegion() {
   state.pendingAnnotations = [];
   state.pendingAnalysisNotes = [];
   state.pendingAnalysisTracks = [];
-  state.pendingAnalysisMetronome = { bpm: 120, offset: 0, muted: false, solo: false };
+  state.pendingAnalysisMetronome = { bpm: 120, signature: '4/4', offset: 0, muted: false, solo: false };
   state.editorActiveAnnotationIndex = null;
   state.editingAnnotationIndex = null;
   state.timingEditAnnotationIndex = null;
@@ -2498,6 +2504,7 @@ function openEditorForNoteIndex(index) {
     : [];
   state.pendingAnalysisMetronome = {
     bpm: Math.max(1, Math.round(Number(note?.analysisMetronome?.bpm ?? 120) || 120)),
+    signature: typeof note?.analysisMetronome?.signature === 'string' ? note.analysisMetronome.signature : '4/4',
     offset: Number(note?.analysisMetronome?.offset ?? 0) || 0,
     muted: !!note?.analysisMetronome?.muted,
     solo: !!note?.analysisMetronome?.solo
@@ -2547,6 +2554,7 @@ function saveNoteEntry(nextPage = 'notes') {
       : [],
     analysisMetronome: {
       bpm: Math.max(1, Math.round(Number(state.pendingAnalysisMetronome?.bpm ?? 120) || 120)),
+      signature: typeof state.pendingAnalysisMetronome?.signature === 'string' ? state.pendingAnalysisMetronome.signature : '4/4',
       offset: Number(state.pendingAnalysisMetronome?.offset ?? 0) || 0,
       muted: !!state.pendingAnalysisMetronome?.muted,
       solo: !!state.pendingAnalysisMetronome?.solo
