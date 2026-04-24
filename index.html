@@ -114,6 +114,7 @@
         <div class="panel">
           <div class="fragment-title">
             <h3>片段列表</h3>
+            <span id="notesDurationSummary" class="hint mono">总时长(>=5s)：0.00s</span>
             <button id="createNoteFromRegion" class="fragment-add-btn" type="button" title="添加片段">+</button>
           </div>
           <ul id="notesList" class="notes"></ul>
@@ -175,19 +176,17 @@
               试听音量
               <input id="analysisPreviewVolume" type="range" min="0" max="2" step="0.01" value="1" />
             </label>
-            <div class="analysis-zoom">
-              <span>横向</span>
-              <button id="analysisTimeZoomOut" type="button" class="ghost plain">-</button>
-              <button id="analysisTimeZoomIn" type="button" class="ghost plain">+</button>
-              <span>纵向</span>
-              <button id="analysisFreqZoomOut" type="button" class="ghost plain">-</button>
-              <button id="analysisFreqZoomIn" type="button" class="ghost plain">+</button>
-            </div>
-            <button id="analysisSaveNotes" type="button" class="ghost plain">保存扒谱</button>
-            <button id="analysisImportMidi" type="button" class="ghost plain">导入MIDI</button>
-            <button id="analysisExportMidi" type="button" class="ghost plain">导出MIDI</button>
-            <button id="analysisAutoShift" type="button" class="ghost plain">自动移调</button>
-            <button id="analysisClearShiftWindow" type="button" class="ghost plain">清除选窗</button>
+            <label class="analysis-action-menu">
+              操作
+              <select id="analysisActionMenu">
+                <option value="save">保存扒谱</option>
+                <option value="import-midi">导入MIDI</option>
+                <option value="export-midi">导出MIDI</option>
+                <option value="auto-shift">自动移调</option>
+                <option value="clear-shift-window">清除选窗</option>
+              </select>
+              <button id="analysisActionRun" type="button" class="ghost plain">执行</button>
+            </label>
             <label class="analysis-toggle">
               <input id="analysisRootThresholdToggle" type="checkbox" checked />
               显示root阈值
@@ -227,22 +226,44 @@
               <span class="analysis-metronome-title">节拍器</span>
               <button id="analysisMetronomeMute" type="button" class="ghost track-toggle">M</button>
               <button id="analysisMetronomeSolo" type="button" class="ghost track-toggle">S</button>
+              <button id="analysisDownbeatCalibrate" type="button" class="ghost track-toggle" title="重拍标定">标</button>
               <label>
                 BPM
                 <input id="analysisMetronomeBpm" type="number" min="20" max="400" step="1" value="120" />
               </label>
               <label>
                 拍号
-                <select id="analysisMetronomeSignature">
-                  <option value="4/4">4/4</option>
-                  <option value="3/4">3/4</option>
-                  <option value="3/8">3/8</option>
-                  <option value="1/4">1/4</option>
-                </select>
+                <input
+                  id="analysisMetronomeSignature"
+                  type="text"
+                  value="4/4"
+                  placeholder="例如 7/8"
+                  inputmode="numeric"
+                  list="analysisMetronomeSignaturePresets"
+                />
+                <datalist id="analysisMetronomeSignaturePresets">
+                  <option value="4/4"></option>
+                  <option value="3/4"></option>
+                  <option value="3/8"></option>
+                  <option value="1/4"></option>
+                  <option value="5/4"></option>
+                  <option value="6/8"></option>
+                  <option value="7/8"></option>
+                </datalist>
               </label>
               <label>
                 Offset(s)
                 <input id="analysisMetronomeOffset" type="number" min="-60" max="60" step="0.01" value="0" />
+              </label>
+              <label>
+                网格
+                <select id="analysisGridDivision">
+                  <option value="8">8分</option>
+                  <option value="16" selected>16分</option>
+                  <option value="32">32分</option>
+                  <option value="triplet">3连音</option>
+                  <option value="sextuplet">6连音</option>
+                </select>
               </label>
             </div>
           </div>

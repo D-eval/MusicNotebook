@@ -111,18 +111,13 @@ const ui = {
   analysisPreviewVolume: document.getElementById('analysisPreviewVolume'),
   analysisMetronomeMute: document.getElementById('analysisMetronomeMute'),
   analysisMetronomeSolo: document.getElementById('analysisMetronomeSolo'),
+  analysisDownbeatCalibrate: document.getElementById('analysisDownbeatCalibrate'),
   analysisMetronomeBpm: document.getElementById('analysisMetronomeBpm'),
   analysisMetronomeSignature: document.getElementById('analysisMetronomeSignature'),
   analysisMetronomeOffset: document.getElementById('analysisMetronomeOffset'),
-  analysisTimeZoomOut: document.getElementById('analysisTimeZoomOut'),
-  analysisTimeZoomIn: document.getElementById('analysisTimeZoomIn'),
-  analysisFreqZoomOut: document.getElementById('analysisFreqZoomOut'),
-  analysisFreqZoomIn: document.getElementById('analysisFreqZoomIn'),
-  analysisSaveNotes: document.getElementById('analysisSaveNotes'),
-  analysisImportMidi: document.getElementById('analysisImportMidi'),
-  analysisExportMidi: document.getElementById('analysisExportMidi'),
-  analysisAutoShift: document.getElementById('analysisAutoShift'),
-  analysisClearShiftWindow: document.getElementById('analysisClearShiftWindow'),
+  analysisGridDivision: document.getElementById('analysisGridDivision'),
+  analysisActionMenu: document.getElementById('analysisActionMenu'),
+  analysisActionRun: document.getElementById('analysisActionRun'),
   analysisLeftToolSelect: document.getElementById('analysisLeftToolSelect'),
   analysisRightToolSelect: document.getElementById('analysisRightToolSelect'),
   analysisRootThresholdToggle: document.getElementById('analysisRootThresholdToggle'),
@@ -136,6 +131,7 @@ const ui = {
   editorWaveSelection: document.getElementById('editorWaveSelection'),
   editorWavePlay: document.getElementById('editorWavePlay'),
   caption: document.getElementById('caption'),
+  notesDurationSummary: document.getElementById('notesDurationSummary'),
   notesList: document.getElementById('notesList')
 };
 
@@ -213,6 +209,10 @@ const state = {
   analysisMetronomeBpm: 120,
   analysisMetronomeSignature: '4/4',
   analysisMetronomeOffset: 0,
+  analysisGridDivision: '16',
+  analysisDownbeatCalibrating: false,
+  analysisDownbeatFirst: null,
+  analysisDownbeatSecond: null,
   analysisMetronomeMuted: false,
   analysisMetronomeSolo: false,
   analysisMetronome: null,
@@ -450,6 +450,13 @@ function normalizeNote(note) {
     bpm: Math.max(1, Math.round(Number(analysisMetronomeRaw?.bpm ?? 120) || 120)),
     signature: typeof analysisMetronomeRaw?.signature === 'string' ? analysisMetronomeRaw.signature : '4/4',
     offset: Number(analysisMetronomeRaw?.offset ?? 0) || 0,
+    gridDivision: typeof analysisMetronomeRaw?.gridDivision === 'string' ? analysisMetronomeRaw.gridDivision : '16',
+    downbeat1: analysisMetronomeRaw?.downbeat1 === null || analysisMetronomeRaw?.downbeat1 === undefined
+      ? NaN
+      : Number(analysisMetronomeRaw.downbeat1),
+    downbeat2: analysisMetronomeRaw?.downbeat2 === null || analysisMetronomeRaw?.downbeat2 === undefined
+      ? NaN
+      : Number(analysisMetronomeRaw.downbeat2),
     muted: !!analysisMetronomeRaw?.muted,
     solo: !!analysisMetronomeRaw?.solo
   };
@@ -561,19 +568,33 @@ async function savePlaylists() {
 }
 
 async function readSongStats(songFolderName) {
-  if (!state.saveDirectoryHandle) return { commentLen: 0, noteCount: 0 };
+  if (!state.saveDirectoryHandle) {
+    return { commentLen: 0, noteCount: 0, segmentDurationSec: 0, markedNoteCount: 0 };
+  }
   try {
     const dirHandle = await state.saveDirectoryHandle.getDirectoryHandle(songFolderName);
     const notesHandle = await dirHandle.getFileHandle('notes.json');
     const parsed = JSON.parse(await (await notesHandle.getFile()).text());
+    const notes = Array.isArray(parsed?.notes) ? parsed.notes : [];
     const songText = typeof parsed?.song?.caption === 'string' ? parsed.song.caption : '';
-    const noteTextLen = Array.isArray(parsed?.notes)
-      ? parsed.notes.reduce((sum, n) => sum + (typeof n?.caption === 'string' ? n.caption.length : 0), 0)
-      : 0;
-    const noteCount = Array.isArray(parsed?.notes) ? parsed.notes.length : 0;
-    return { commentLen: songText.length + noteTextLen, noteCount };
+    const noteTextLen = notes.reduce((sum, n) => sum + (typeof n?.caption === 'string' ? n.caption.length : 0), 0);
+    const noteCount = notes.length;
+    const segmentDurationSec = notes.reduce((sum, n) => {
+      const start = Number(n?.start ?? 0);
+      const end = Number(n?.end ?? start);
+      return sum + Math.max(0, end - start);
+    }, 0);
+    const markedNoteCount = notes.reduce((sum, n) => {
+      const tracks = Array.isArray(n?.analysisTracks) ? n.analysisTracks : [];
+      const trackNotes = tracks.reduce((trackSum, t) => {
+        const list = Array.isArray(t?.notes) ? t.notes : [];
+        return trackSum + list.length;
+      }, 0);
+      return sum + trackNotes;
+    }, 0);
+    return { commentLen: songText.length + noteTextLen, noteCount, segmentDurationSec, markedNoteCount };
   } catch {
-    return { commentLen: 0, noteCount: 0 };
+    return { commentLen: 0, noteCount: 0, segmentDurationSec: 0, markedNoteCount: 0 };
   }
 }
 
@@ -715,11 +736,11 @@ async function refreshTocList() {
     const openBtn = document.createElement('button');
     openBtn.type = 'button';
     openBtn.className = 'toc-item name-btn';
-    const { commentLen, noteCount } = await readSongStats(songName);
+    const { segmentDurationSec, markedNoteCount } = await readSongStats(songName);
     openBtn.textContent = songName;
     const meta = document.createElement('span');
     meta.className = 'toc-meta';
-    meta.textContent = `${commentLen}字 · ${noteCount}事件`;
+    meta.textContent = `段落${segmentDurationSec.toFixed(2)}s · 音符${markedNoteCount}`;
     openBtn.addEventListener('click', async () => {
       const dirHandle = await state.saveDirectoryHandle.getDirectoryHandle(songName);
       await openNotesFromDirectoryHandle(dirHandle);
@@ -1692,6 +1713,13 @@ function makeNotesJson() {
         bpm: Math.max(1, Math.round(Number(n?.analysisMetronome?.bpm ?? 120) || 120)),
         signature: typeof n?.analysisMetronome?.signature === 'string' ? n.analysisMetronome.signature : '4/4',
         offset: Number(n?.analysisMetronome?.offset ?? 0) || 0,
+        gridDivision: typeof n?.analysisMetronome?.gridDivision === 'string' ? n.analysisMetronome.gridDivision : '16',
+        downbeat1: n?.analysisMetronome?.downbeat1 === null || n?.analysisMetronome?.downbeat1 === undefined
+          ? NaN
+          : Number(n.analysisMetronome.downbeat1),
+        downbeat2: n?.analysisMetronome?.downbeat2 === null || n?.analysisMetronome?.downbeat2 === undefined
+          ? NaN
+          : Number(n.analysisMetronome.downbeat2),
         muted: !!n?.analysisMetronome?.muted,
         solo: !!n?.analysisMetronome?.solo
       }
@@ -1862,6 +1890,13 @@ async function openNotesFromDirectoryHandle(dirHandle) {
 
 function renderNotes() {
   ui.notesList.innerHTML = '';
+  const totalDurationSec = state.notes.reduce((sum, note) => {
+    const dur = Math.max(0, Number(note?.end ?? 0) - Number(note?.start ?? 0));
+    return sum + (dur >= 5 ? dur : 0);
+  }, 0);
+  if (ui.notesDurationSummary) {
+    ui.notesDurationSummary.textContent = `总时长(>=5s)：${totalDurationSec.toFixed(2)}s`;
+  }
   if (!state.notes.length) {
     const li = document.createElement('li');
     li.textContent = '暂无笔记';
@@ -1875,11 +1910,10 @@ function renderNotes() {
     const li = document.createElement('li');
     li.className = 'fragment-item';
     const tagsText = Array.isArray(note.tags) && note.tags.length ? note.tags.join(', ') : '无标签';
+    const durationSec = Math.max(0, Number(note.end ?? 0) - Number(note.start ?? 0));
 
     const title = document.createElement('div');
-    title.innerHTML = `<strong>#${idx + 1}</strong> [${note.start.toFixed(2)} - ${note.end.toFixed(2)}] ${
-      note.caption || ''
-    }`;
+    title.innerHTML = `<strong>#${idx + 1}</strong> [${note.start.toFixed(2)} - ${note.end.toFixed(2)} | ${durationSec.toFixed(2)}s] ${note.caption || ''}`;
     const meta = document.createElement('div');
     meta.className = 'hint';
     meta.textContent = tagsText;
@@ -2462,7 +2496,16 @@ function openEditorWithCurrentRegion() {
   state.pendingAnnotations = [];
   state.pendingAnalysisNotes = [];
   state.pendingAnalysisTracks = [];
-  state.pendingAnalysisMetronome = { bpm: 120, signature: '4/4', offset: 0, muted: false, solo: false };
+  state.pendingAnalysisMetronome = {
+    bpm: 120,
+    signature: '4/4',
+    offset: 0,
+    gridDivision: '16',
+    downbeat1: NaN,
+    downbeat2: NaN,
+    muted: false,
+    solo: false
+  };
   state.editorActiveAnnotationIndex = null;
   state.editingAnnotationIndex = null;
   state.timingEditAnnotationIndex = null;
@@ -2506,6 +2549,13 @@ function openEditorForNoteIndex(index) {
     bpm: Math.max(1, Math.round(Number(note?.analysisMetronome?.bpm ?? 120) || 120)),
     signature: typeof note?.analysisMetronome?.signature === 'string' ? note.analysisMetronome.signature : '4/4',
     offset: Number(note?.analysisMetronome?.offset ?? 0) || 0,
+    gridDivision: typeof note?.analysisMetronome?.gridDivision === 'string' ? note.analysisMetronome.gridDivision : '16',
+    downbeat1: note?.analysisMetronome?.downbeat1 === null || note?.analysisMetronome?.downbeat1 === undefined
+      ? NaN
+      : Number(note.analysisMetronome.downbeat1),
+    downbeat2: note?.analysisMetronome?.downbeat2 === null || note?.analysisMetronome?.downbeat2 === undefined
+      ? NaN
+      : Number(note.analysisMetronome.downbeat2),
     muted: !!note?.analysisMetronome?.muted,
     solo: !!note?.analysisMetronome?.solo
   };
@@ -2556,6 +2606,9 @@ function saveNoteEntry(nextPage = 'notes') {
       bpm: Math.max(1, Math.round(Number(state.pendingAnalysisMetronome?.bpm ?? 120) || 120)),
       signature: typeof state.pendingAnalysisMetronome?.signature === 'string' ? state.pendingAnalysisMetronome.signature : '4/4',
       offset: Number(state.pendingAnalysisMetronome?.offset ?? 0) || 0,
+      gridDivision: typeof state.pendingAnalysisMetronome?.gridDivision === 'string' ? state.pendingAnalysisMetronome.gridDivision : '16',
+      downbeat1: Number(state.pendingAnalysisMetronome?.downbeat1),
+      downbeat2: Number(state.pendingAnalysisMetronome?.downbeat2),
       muted: !!state.pendingAnalysisMetronome?.muted,
       solo: !!state.pendingAnalysisMetronome?.solo
     }

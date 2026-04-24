@@ -9,8 +9,11 @@ function getAnalysisRange() {
   return { start: 0, end: duration };
 }
 
+const MIDI_MIN = 0;
+const MIDI_MAX = 127;
+
 function buildMidiFreqs() {
-  return buildMidiFreqsRange(24, 107);
+  return buildMidiFreqsRange(MIDI_MIN, MIDI_MAX);
 }
 
 function buildMidiFreqsRange(minMidi, maxMidi) {
@@ -94,13 +97,15 @@ const ROOT_THRESHOLD_SEC = 0.05;
 const BEAT_THRESHOLD_SEC = 0.05;
 const CREATE_DRAG_DEADZONE_PX = 6;
 const TRACK_NAME_PRESETS = ['<root>', '<chord>', '<tonic>', '<beat>',
-  "<atomsphere>",
+  "<atomsphere>", "<use_beat>", "<rootless>"
 ];
 const DEFAULT_ANALYSIS_TRACKS = [
   { name: '<beat>', type: 'transient' },
   { name: '<root>', type: 'pitch' },
   { name: '<chord>', type: 'pitch' },
-  { name: '<tonic>', type: 'pitch' }
+  { name: '<tonic>', type: 'pitch' },
+  { name: '<use_beat>', type: 'silent'},
+  { name: '<rootless>', type: 'silent'}, // 无根音的和弦
 ];
 
 function buildWindow(windowLen, type) {
@@ -215,11 +220,9 @@ function estimateShiftCents(mono, sampleRate, shiftRange = [-50, 50], step = 1) 
 
 function applyMidiShiftToTracks(semitones) {
   if (!Number.isFinite(semitones) || semitones === 0) return;
-  const minMidi = 24;
-  const maxMidi = 107;
   state.analysisTracks.forEach((track) => {
     track.notes.forEach((note) => {
-      note.midi = clamp(Math.round(note.midi + semitones), minMidi, maxMidi);
+      note.midi = clamp(Math.round(note.midi + semitones), MIDI_MIN, MIDI_MAX);
     });
   });
 }
@@ -452,11 +455,15 @@ function loadAnalysisNotesForTarget() {
   state.analysisMetronomeBpm = Math.max(1, Math.round(Number(metro?.bpm ?? state.analysisMetronomeBpm ?? 120) || 120));
   state.analysisMetronomeSignature = normalizeMetronomeSignature(metro?.signature ?? state.analysisMetronomeSignature ?? '4/4');
   state.analysisMetronomeOffset = Number(metro?.offset ?? state.analysisMetronomeOffset ?? 0) || 0;
+  state.analysisGridDivision = normalizeAnalysisGridDivision(metro?.gridDivision ?? state.analysisGridDivision ?? '16');
+  state.analysisDownbeatFirst = (metro?.downbeat1 === null || metro?.downbeat1 === undefined) ? NaN : Number(metro.downbeat1);
+  state.analysisDownbeatSecond = (metro?.downbeat2 === null || metro?.downbeat2 === undefined) ? NaN : Number(metro.downbeat2);
   state.analysisMetronomeMuted = !!metro?.muted;
   state.analysisMetronomeSolo = !!metro?.solo;
   if (ui.analysisMetronomeBpm) ui.analysisMetronomeBpm.value = String(state.analysisMetronomeBpm);
   if (ui.analysisMetronomeSignature) ui.analysisMetronomeSignature.value = state.analysisMetronomeSignature;
   if (ui.analysisMetronomeOffset) ui.analysisMetronomeOffset.value = String(state.analysisMetronomeOffset);
+  if (ui.analysisGridDivision) ui.analysisGridDivision.value = state.analysisGridDivision;
   updateMetronomeToggleUI();
   ensureAnalysisTracks();
   setActiveAnalysisTrack(state.analysisActiveTrackId);
@@ -469,6 +476,9 @@ function persistAnalysisNotesToTarget() {
     bpm: Math.max(1, Math.round(Number(state.analysisMetronomeBpm ?? 120) || 120)),
     signature: normalizeMetronomeSignature(state.analysisMetronomeSignature ?? '4/4'),
     offset: Number(state.analysisMetronomeOffset ?? 0) || 0,
+    gridDivision: normalizeAnalysisGridDivision(state.analysisGridDivision ?? '16'),
+    downbeat1: Number(state.analysisDownbeatFirst),
+    downbeat2: Number(state.analysisDownbeatSecond),
     muted: !!state.analysisMetronomeMuted,
     solo: !!state.analysisMetronomeSolo
   };
@@ -507,8 +517,8 @@ function analysisViewYSpan() {
 }
 
 function setAnalysisViewY(minMidi, maxMidi) {
-  const minLimit = 24;
-  const maxLimit = 107;
+  const minLimit = MIDI_MIN;
+  const maxLimit = MIDI_MAX;
   let min = Math.round(minMidi);
   let max = Math.max(min + 1, Math.round(maxMidi));
   const span = Math.max(1, max - min);
@@ -586,9 +596,82 @@ function getBeatClassColor(cls) {
 }
 
 function normalizeMetronomeSignature(signature) {
-  const s = String(signature || '').trim();
-  if (s === '4/4' || s === '3/4' || s === '3/8' || s === '1/4') return s;
+  const s = String(signature || '').trim().replace(/\s+/g, '');
+  const m = /^(\d+)[\/／](\d+)$/.exec(s);
+  if (m) {
+    const num = Math.max(1, Math.min(64, parseInt(m[1], 10) || 4));
+    const den = Math.max(1, Math.min(64, parseInt(m[2], 10) || 4));
+    return `${num}/${den}`;
+  }
   return '4/4';
+}
+
+function normalizeAnalysisGridDivision(value) {
+  const v = String(value || '').trim();
+  if (v === '8' || v === '16' || v === '32' || v === 'triplet' || v === 'sextuplet') return v;
+  return '16';
+}
+
+function getGridSubdivisionPerBeat() {
+  const division = normalizeAnalysisGridDivision(state.analysisGridDivision || '16');
+  if (division === '8') return 2;
+  if (division === '16') return 4;
+  if (division === '32') return 8;
+  if (division === 'triplet') return 3;
+  return 6;
+}
+
+function ensureDownbeatAnchors() {
+  const rangeStart = Number(state.analysisRange?.start ?? 0);
+  const rangeEnd = Number(state.analysisRange?.end ?? rangeStart + 1);
+  const minGap = 0.05;
+  const meter = getMetronomeMeter();
+  const barSec = Math.max(minGap, meter.beatsPerBar * meter.beatSec);
+  let first = Number(state.analysisDownbeatFirst);
+  let second = Number(state.analysisDownbeatSecond);
+  if (!Number.isFinite(first)) first = Number(state.analysisMetronomeOffset);
+  if (!Number.isFinite(first)) first = rangeStart;
+  first = clamp(first, rangeStart, rangeEnd);
+  if (!Number.isFinite(second) || second <= first + minGap) second = first + barSec;
+  second = clamp(second, first + minGap, rangeEnd);
+  if (second <= first + minGap) {
+    first = Math.max(rangeStart, rangeEnd - minGap);
+    second = Math.min(rangeEnd, first + minGap);
+  }
+  state.analysisDownbeatFirst = first;
+  state.analysisDownbeatSecond = second;
+}
+
+function applyMeterFromDownbeats() {
+  ensureDownbeatAnchors();
+  const meter = getMetronomeMeter();
+  const denominator = Math.max(1, meter.denominator || 4);
+  const beatsPerBar = Math.max(1, meter.beatsPerBar || 4);
+  const barSec = Math.max(0.01, state.analysisDownbeatSecond - state.analysisDownbeatFirst);
+  const bpmRaw = (60 * beatsPerBar * (4 / denominator)) / barSec;
+  const bpm = clamp(Math.round(bpmRaw), 1, 400);
+  state.analysisMetronomeBpm = bpm;
+  state.analysisMetronomeOffset = state.analysisDownbeatFirst;
+  if (ui.analysisMetronomeBpm) ui.analysisMetronomeBpm.value = String(bpm);
+  if (ui.analysisMetronomeOffset) ui.analysisMetronomeOffset.value = String(state.analysisMetronomeOffset.toFixed(3));
+}
+
+function syncDownbeatsFromMeter() {
+  const rangeStart = Number(state.analysisRange?.start ?? 0);
+  const rangeEnd = Number(state.analysisRange?.end ?? rangeStart + 1);
+  const meter = getMetronomeMeter();
+  const barSec = Math.max(0.05, meter.beatsPerBar * meter.beatSec);
+  let first = Number(state.analysisMetronomeOffset);
+  if (!Number.isFinite(first)) first = rangeStart;
+  first = clamp(first, rangeStart, rangeEnd);
+  let second = first + barSec;
+  second = clamp(second, first + 0.05, rangeEnd);
+  if (second <= first + 0.05) {
+    first = Math.max(rangeStart, rangeEnd - 0.05);
+    second = Math.min(rangeEnd, first + 0.05);
+  }
+  state.analysisDownbeatFirst = first;
+  state.analysisDownbeatSecond = second;
 }
 
 function getMetronomeMeter() {
@@ -619,6 +702,33 @@ function drawAnalysisMetronomeGrid(ctx, width, height) {
   }
   const yStart = getAnalysisYOffset();
   ctx.save();
+  const subdivPerBeat = getGridSubdivisionPerBeat();
+  if (subdivPerBeat > 1) {
+    const subdivSec = beatSec / subdivPerBeat;
+    if (Number.isFinite(subdivSec) && subdivSec > 0) {
+      const subdivCount = Math.max(0, Math.floor((viewEnd - viewStart) / subdivSec) + 2);
+      const subdivStep = subdivCount > 2000 ? Math.ceil(subdivCount / 2000) : 1;
+      let subdivIndex = Math.floor((viewStart - offset) / subdivSec);
+      let ts = offset + subdivIndex * subdivSec;
+      if (ts < viewStart) {
+        subdivIndex += 1;
+        ts += subdivSec;
+      }
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
+      ctx.lineWidth = 1;
+      while (ts <= viewEnd) {
+        if ((subdivIndex % subdivStep) === 0 && (subdivIndex % subdivPerBeat) !== 0) {
+          const x = timeToX(ts, width);
+          ctx.beginPath();
+          ctx.moveTo(x, yStart);
+          ctx.lineTo(x, height);
+          ctx.stroke();
+        }
+        subdivIndex += 1;
+        ts += subdivSec;
+      }
+    }
+  }
   while (t <= viewEnd) {
     if ((beatIndex % step) === 0) {
       const x = timeToX(t, width);
@@ -633,6 +743,37 @@ function drawAnalysisMetronomeGrid(ctx, width, height) {
     beatIndex += 1;
     t += beatSec;
   }
+  ctx.restore();
+}
+
+function drawDownbeatAnchors(ctx, width, height) {
+  if (!state.analysisDownbeatCalibrating) return;
+  ensureDownbeatAnchors();
+  const yStart = getAnalysisYOffset();
+  const anchors = [
+    { key: 'analysisDownbeatFirst', label: '重拍1', color: 'rgba(34,197,94,0.95)' },
+    { key: 'analysisDownbeatSecond', label: '重拍2', color: 'rgba(59,130,246,0.95)' }
+  ];
+  ctx.save();
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.font = '600 11px "STHeiti", "PingFang SC", sans-serif';
+  anchors.forEach((item) => {
+    const t = Number(state[item.key]);
+    if (!Number.isFinite(t)) return;
+    const x = timeToX(t, width);
+    ctx.strokeStyle = item.color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x, yStart);
+    ctx.lineTo(x, height);
+    ctx.stroke();
+    ctx.fillStyle = item.color;
+    ctx.fillRect(x - 4, yStart - 6, 8, 6);
+    const labelX = clamp(x + 6, 2, Math.max(2, width - 56));
+    const labelY = Math.max(2, yStart - 18);
+    ctx.fillText(item.label, labelX, labelY);
+  });
   ctx.restore();
 }
 
@@ -654,7 +795,7 @@ function drawAnalysisNotes() {
   // Root thresholds for alignment hint (start only)
   if (state.analysisShowRootThreshold !== false) {
     const rootTracks = (state.analysisTracks || []).filter(
-      (t) => t && typeof t.name === 'string' && t.name.trim() === '<root>'
+      (t) => t && typeof t.name === 'string' && ['<root>', '<rootless>'].includes(t.name.trim())
     );
     if (rootTracks.length) {
       const eps = ROOT_THRESHOLD_SEC;
@@ -744,6 +885,7 @@ function drawAnalysisNotes() {
       }
     });
   });
+  drawDownbeatAnchors(ctx, width, height);
   drawAnalysisShiftWindow(ctx, width, height);
   drawAnalysisPlayhead();
 }
@@ -815,6 +957,9 @@ function updateMetronomeToggleUI() {
   }
   if (ui.analysisMetronomeSolo) {
     ui.analysisMetronomeSolo.classList.toggle('active', !!state.analysisMetronomeSolo);
+  }
+  if (ui.analysisDownbeatCalibrate) {
+    ui.analysisDownbeatCalibrate.classList.toggle('active', !!state.analysisDownbeatCalibrating);
   }
 }
 
@@ -1201,7 +1346,7 @@ function buildAnalysisTracksFromMidi(parsedMidi) {
         const endRel = tickToSec(evt.tick);
         const start = baseStart + Math.max(0, startRel);
         const end = baseStart + Math.max(startRel + 0.02, endRel);
-        const midi = clamp(Math.round(on.midi), 0, 127);
+        const midi = clamp(Math.round(on.midi), MIDI_MIN, MIDI_MAX);
         const velocity = clamp(on.velocity ?? 0.7, 0.01, 1);
         notes.push({
           id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
@@ -1307,7 +1452,7 @@ function buildMidiFileBytes() {
       const startTick = Math.round(startSec * ticksPerSecond);
       const endTick = Math.round(endSec * ticksPerSecond);
       const vel = clamp(Math.round((note.velocity ?? 0.7) * 127), 1, 127);
-      const midi = clamp(Math.round(note.midi), 0, 127);
+      const midi = clamp(Math.round(note.midi), MIDI_MIN, MIDI_MAX);
       events.push({ tick: startTick, order: 1, data: [0x90 | safeChannel, midi, vel] });
       events.push({ tick: endTick, order: 0, data: [0x80 | safeChannel, midi, 0] });
     });
@@ -1734,8 +1879,8 @@ function drawAnalysisSpectrogram() {
   const viewEnd = state.analysisView.end;
   const sens = ANALYSIS_SENSITIVITY;
   if (rangeDur <= 0) return;
-  const fullMidiMin = 24;
-  const fullMidiMax = 107;
+  const fullMidiMin = MIDI_MIN;
+  const fullMidiMax = MIDI_MAX;
   const fullBins = fullMidiMax - fullMidiMin + 1;
   const viewMin = state.analysisViewY.min;
   const viewMax = state.analysisViewY.max;
@@ -1877,7 +2022,7 @@ async function analyzeSpectrogram() {
   const range = getAnalysisRange();
   state.analysisRange = { start: range.start, end: range.end };
   state.analysisView = { start: range.start, end: range.end };
-  state.analysisViewY = { min: 48, max: 71 };
+  state.analysisViewY = { min: MIDI_MIN, max: MIDI_MAX };
   const decoded = await decodeAudioBuffer(safeBlob);
   const sr = decoded.sampleRate;
   const ch = decoded.numberOfChannels;
@@ -2063,7 +2208,7 @@ async function estimateShiftAndExportWav() {
 ui.goAnalysis.addEventListener('click', () => {
   state.analysisRange = getAnalysisRange();
   state.analysisView = { start: state.analysisRange.start, end: state.analysisRange.end };
-  state.analysisViewY = { min: 48, max: 71 };
+  state.analysisViewY = { min: MIDI_MIN, max: MIDI_MAX };
   state.analysisTargetIndex = state.editingNoteIndex !== null ? state.editingNoteIndex : null;
   state.analysisShiftWindow = null;
   state.analysisShiftDrag = null;
@@ -2083,6 +2228,7 @@ ui.goAnalysis.addEventListener('click', () => {
   if (ui.analysisMetronomeBpm) ui.analysisMetronomeBpm.value = String(state.analysisMetronomeBpm ?? 120);
   if (ui.analysisMetronomeSignature) ui.analysisMetronomeSignature.value = normalizeMetronomeSignature(state.analysisMetronomeSignature ?? '4/4');
   if (ui.analysisMetronomeOffset) ui.analysisMetronomeOffset.value = String(state.analysisMetronomeOffset ?? 0);
+  if (ui.analysisGridDivision) ui.analysisGridDivision.value = normalizeAnalysisGridDivision(state.analysisGridDivision ?? '16');
   applyAnalysisAudioVolume();
   applyAnalysisSynthVolume();
   setAnalysisAudioSource();
@@ -2141,38 +2287,6 @@ if (ui.analysisAddTrack) {
     drawAnalysisNotes();
   });
 }
-if (ui.analysisTimeZoomIn) {
-  ui.analysisTimeZoomIn.addEventListener('click', () => {
-    const zoom = 1.2;
-    const span = analysisViewDuration() / zoom;
-    const center = state.analysisAudio ? state.analysisAudio.currentTime : (state.analysisView.start + state.analysisView.end) / 2;
-    setAnalysisView(center - span / 2, center + span / 2);
-  });
-}
-  if (ui.analysisTimeZoomOut) {
-    ui.analysisTimeZoomOut.addEventListener('click', () => {
-      const zoom = 1.2;
-      const span = analysisViewDuration() * zoom;
-      const center = state.analysisAudio ? state.analysisAudio.currentTime : (state.analysisView.start + state.analysisView.end) / 2;
-      setAnalysisView(center - span / 2, center + span / 2);
-    });
-  }
-if (ui.analysisFreqZoomIn) {
-  ui.analysisFreqZoomIn.addEventListener('click', () => {
-    const zoom = 1.2;
-    const span = analysisViewYSpan() / zoom;
-    const center = (state.analysisViewY.min + state.analysisViewY.max) / 2;
-    setAnalysisViewY(center - span / 2, center + span / 2);
-  });
-}
-  if (ui.analysisFreqZoomOut) {
-    ui.analysisFreqZoomOut.addEventListener('click', () => {
-      const zoom = 1.2;
-      const span = analysisViewYSpan() * zoom;
-      const center = (state.analysisViewY.min + state.analysisViewY.max) / 2;
-      setAnalysisViewY(center - span / 2, center + span / 2);
-    });
-  }
   window.addEventListener('resize', () => {
     if (!pages.analysis.classList.contains('active')) return;
     refreshAnalysisLayout();
@@ -2212,6 +2326,7 @@ if (ui.analysisMetronomeBpm) {
   ui.analysisMetronomeBpm.addEventListener('input', () => {
     state.analysisMetronomeBpm = Math.max(1, Math.round(Number(ui.analysisMetronomeBpm.value) || 120));
     ui.analysisMetronomeBpm.value = String(state.analysisMetronomeBpm);
+    syncDownbeatsFromMeter();
     drawAnalysisNotes();
     refreshAnalysisMetronomeIfPlaying();
   });
@@ -2221,6 +2336,7 @@ if (ui.analysisMetronomeSignature) {
   ui.analysisMetronomeSignature.addEventListener('change', () => {
     state.analysisMetronomeSignature = normalizeMetronomeSignature(ui.analysisMetronomeSignature.value);
     ui.analysisMetronomeSignature.value = state.analysisMetronomeSignature;
+    syncDownbeatsFromMeter();
     drawAnalysisNotes();
     refreshAnalysisMetronomeIfPlaying();
   });
@@ -2229,8 +2345,30 @@ if (ui.analysisMetronomeOffset) {
   ui.analysisMetronomeOffset.value = String(state.analysisMetronomeOffset ?? 0);
   ui.analysisMetronomeOffset.addEventListener('input', () => {
     state.analysisMetronomeOffset = Number(ui.analysisMetronomeOffset.value) || 0;
+    syncDownbeatsFromMeter();
     drawAnalysisNotes();
     refreshAnalysisMetronomeIfPlaying();
+  });
+}
+if (ui.analysisGridDivision) {
+  ui.analysisGridDivision.value = normalizeAnalysisGridDivision(state.analysisGridDivision ?? '16');
+  ui.analysisGridDivision.addEventListener('change', () => {
+    state.analysisGridDivision = normalizeAnalysisGridDivision(ui.analysisGridDivision.value);
+    ui.analysisGridDivision.value = state.analysisGridDivision;
+    drawAnalysisNotes();
+  });
+}
+if (ui.analysisDownbeatCalibrate) {
+  ui.analysisDownbeatCalibrate.addEventListener('click', () => {
+    state.analysisDownbeatCalibrating = !state.analysisDownbeatCalibrating;
+    if (state.analysisDownbeatCalibrating) {
+      ensureDownbeatAnchors();
+      setStatus('重拍标定已开启：拖动重拍1/重拍2竖线可自动计算 BPM 与 Offset');
+    } else {
+      setStatus('重拍标定已关闭');
+    }
+    updateMetronomeToggleUI();
+    drawAnalysisNotes();
   });
 }
 if (ui.analysisMetronomeMute) {
@@ -2270,8 +2408,8 @@ if (ui.analysisBeatThresholdToggle) {
   });
 }
 
-if (ui.analysisSaveNotes) {
-  ui.analysisSaveNotes.addEventListener('click', async () => {
+async function runAnalysisMenuAction(action) {
+  if (action === 'save') {
     persistAnalysisNotesToTarget();
     if (state.saveDirectoryHandle) {
       await autoSaveProjectSilently();
@@ -2279,36 +2417,38 @@ if (ui.analysisSaveNotes) {
     } else {
       setStatus('扒谱已保存到当前片段（未选择保存目录）');
     }
-  });
-}
-if (ui.analysisImportMidi) {
-  ui.analysisImportMidi.addEventListener('click', async () => {
+    return;
+  }
+  if (action === 'import-midi') {
     try {
       await importMidiToAnalysis();
     } catch (err) {
       console.error(err);
       setStatus(`导入 MIDI 失败：${err?.message || err}`);
     }
-  });
-}
-if (ui.analysisExportMidi) {
-  ui.analysisExportMidi.addEventListener('click', () => {
+    return;
+  }
+  if (action === 'export-midi') {
     const bytes = buildMidiFileBytes();
     const base = sanitizeFolderName(stripExtension(state.audioName || 'music'));
     downloadBlob(new Blob([bytes], { type: 'audio/midi' }), `${base}_analysis.mid`);
-  });
-}
-if (ui.analysisAutoShift) {
-  ui.analysisAutoShift.addEventListener('click', () => {
+    return;
+  }
+  if (action === 'auto-shift') {
     estimateShiftAndExportWav();
-  });
-}
-if (ui.analysisClearShiftWindow) {
-  ui.analysisClearShiftWindow.addEventListener('click', () => {
+    return;
+  }
+  if (action === 'clear-shift-window') {
     state.analysisShiftWindow = null;
     state.analysisShiftDrag = null;
     drawAnalysisNotes();
     setStatus('已清除选窗');
+  }
+}
+
+if (ui.analysisActionRun && ui.analysisActionMenu) {
+  ui.analysisActionRun.addEventListener('click', () => {
+    runAnalysisMenuAction(ui.analysisActionMenu.value);
   });
 }
 ui.analysisTimebar.addEventListener('pointerdown', (evt) => {
@@ -2350,17 +2490,28 @@ if (ui.analysisNotes) {
     const rect = ui.analysisNotes.getBoundingClientRect();
     const width = rect.width;
     const height = rect.height;
+    const x = evt.clientX - rect.left;
+    const y = evt.clientY - rect.top;
     const dx = evt.deltaX;
     const dy = evt.deltaY;
-    if (dx !== 0) {
-      const dt = (dx / width) * analysisViewDuration();
-      setAnalysisView(state.analysisView.start + dt, state.analysisView.end + dt);
+    const delta = Math.abs(dy) >= Math.abs(dx) ? dy : dx;
+    if (delta === 0) return;
+    const zoom = Math.exp(-delta * 0.0025);
+    if (evt.shiftKey) {
+      const anchorTime = xToTime(x, width);
+      const span = Math.max(0.01, analysisViewDuration());
+      const ratio = clamp((anchorTime - state.analysisView.start) / span, 0, 1);
+      const nextSpan = span / zoom;
+      const nextStart = anchorTime - ratio * nextSpan;
+      setAnalysisView(nextStart, nextStart + nextSpan);
+      return;
     }
-    if (dy !== 0) {
-      const rows = analysisViewYSpan();
-      const dmidi = (dy / height) * rows;
-      setAnalysisViewY(state.analysisViewY.min - dmidi, state.analysisViewY.max - dmidi);
-    }
+    const anchorMidi = yToMidi(y, height);
+    const span = Math.max(1, state.analysisViewY.max - state.analysisViewY.min);
+    const ratio = clamp((anchorMidi - state.analysisViewY.min) / span, 0, 1);
+    const nextSpan = span / zoom;
+    const nextMin = anchorMidi - ratio * nextSpan;
+    setAnalysisViewY(nextMin, nextMin + nextSpan);
   }, { passive: false });
   ui.analysisNotes.addEventListener('pointerdown', (evt) => {
     if (!ui.analysisNotes) return;
@@ -2371,6 +2522,20 @@ if (ui.analysisNotes) {
     const height = rect.height;
     const offset = getAnalysisYOffset();
     if (y < offset) return;
+    if (state.analysisDownbeatCalibrating) {
+      ensureDownbeatAnchors();
+      const hitPx = 8;
+      const x1 = timeToX(state.analysisDownbeatFirst, width);
+      const x2 = timeToX(state.analysisDownbeatSecond, width);
+      const d1 = Math.abs(x - x1);
+      const d2 = Math.abs(x - x2);
+      if (d1 <= hitPx || d2 <= hitPx) {
+        state.analysisDrag = {
+          mode: d1 <= d2 ? 'downbeat-first' : 'downbeat-second'
+        };
+        return;
+      }
+    }
     const tool = getToolForButton(evt.button);
     hideVelocitySlider();
     if (tool === "shift-window") {
@@ -2505,6 +2670,20 @@ if (ui.analysisNotes) {
     const width = rect.width;
     const height = rect.height;
     const drag = state.analysisDrag;
+    if (drag.mode === 'downbeat-first' || drag.mode === 'downbeat-second') {
+      const t = clamp(xToTime(x, width), state.analysisRange.start, state.analysisRange.end);
+      const minGap = 0.05;
+      if (drag.mode === 'downbeat-first') {
+        state.analysisDownbeatFirst = Math.min(t, Number(state.analysisDownbeatSecond) - minGap);
+      } else {
+        state.analysisDownbeatSecond = Math.max(t, Number(state.analysisDownbeatFirst) + minGap);
+      }
+      ensureDownbeatAnchors();
+      applyMeterFromDownbeats();
+      drawAnalysisNotes();
+      refreshAnalysisMetronomeIfPlaying();
+      return;
+    }
     if (drag.mode === 'pan') {
       const dt = xToTime(drag.startX, width) - xToTime(x, width);
       const dy = y - drag.startY;

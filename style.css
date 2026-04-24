@@ -889,7 +889,8 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.25);
 }
 
-.analysis-metronome-panel select {
+.analysis-metronome-panel select,
+.analysis-metronome-panel input[type="text"] {
   width: 84px;
   margin-top: 0;
   padding: 4px 8px;
