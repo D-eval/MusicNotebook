@@ -13,6 +13,7 @@
         <h3>设置</h3>
         <p id="defaultPathHint" class="hint">保存目录：~/music_note</p>
         <button id="changeSaveDir" class="ghost" type="button">更改保存目录</button>
+        <button id="startGuideInSettings" class="ghost" type="button">新手教学</button>
       </div>
 
       <section id="homePage" class="page active">
@@ -314,6 +315,17 @@
         <button id="tocMenuOpen" type="button">进入</button>
         <button id="tocMenuRename" type="button">重命名</button>
         <button id="tocMenuDelete" type="button">删除</button>
+      </div>
+      <div id="guideOverlay" class="guide-overlay">
+        <div id="guideSpotlight" class="guide-spotlight"></div>
+        <div class="guide-card">
+          <div id="guideStep" class="guide-step"></div>
+          <h3 id="guideTitle"></h3>
+          <p id="guideBody"></p>
+          <div class="row wrap gap">
+            <button id="guideClose" type="button" class="ghost">退出教学</button>
+          </div>
+        </div>
       </div>
     </main>
 

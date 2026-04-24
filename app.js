@@ -42,6 +42,7 @@ const ui = {
   settingsPanel: document.getElementById('settingsPanel'),
   defaultPathHint: document.getElementById('defaultPathHint'),
   changeSaveDir: document.getElementById('changeSaveDir'),
+  startGuideInSettings: document.getElementById('startGuideInSettings'),
   openNotebookBook: document.getElementById('openNotebookBook'),
   playlistList: document.getElementById('playlistList'),
   songListTitle: document.getElementById('songListTitle'),
@@ -74,6 +75,12 @@ const ui = {
   tagPickerModal: document.getElementById('tagPickerModal'),
   tagPickerList: document.getElementById('tagPickerList'),
   closeTagPicker: document.getElementById('closeTagPicker'),
+  guideOverlay: document.getElementById('guideOverlay'),
+  guideSpotlight: document.getElementById('guideSpotlight'),
+  guideTitle: document.getElementById('guideTitle'),
+  guideBody: document.getElementById('guideBody'),
+  guideStep: document.getElementById('guideStep'),
+  guideClose: document.getElementById('guideClose'),
   startRecord: document.getElementById('startRecord'),
   stopRecord: document.getElementById('stopRecord'),
   toNotesAfterRecord: document.getElementById('toNotesAfterRecord'),
@@ -216,6 +223,9 @@ const state = {
   analysisMetronomeMuted: false,
   analysisMetronomeSolo: false,
   analysisMetronome: null,
+  guideActive: false,
+  guideStepIndex: 0,
+  guideReturnPage: 'toc',
   isModifierPanning: false,
   panStartX: 0,
   panStartScrollLeft: 0,
@@ -233,6 +243,9 @@ const ANALYSIS_CQT_STRIDE_RATIO = 0.125;
 const ANALYSIS_CQT_WINDOW_TYPE = 'hann';
 const ANALYSIS_CQT_SCALE = 7;
 const MAX_ZOOM_PX_PER_SEC = 2000;
+const PROJECT_AUDIO_DIR = 'audio';
+const PROJECT_NOTES_DIR = 'notes';
+const PROJECT_AUDIO_EXT = '.mp3';
 
 function showPage(name, animClass = '') {
   Object.values(pages).forEach((p) => p.classList.remove('active'));
@@ -451,12 +464,6 @@ function normalizeNote(note) {
     signature: typeof analysisMetronomeRaw?.signature === 'string' ? analysisMetronomeRaw.signature : '4/4',
     offset: Number(analysisMetronomeRaw?.offset ?? 0) || 0,
     gridDivision: typeof analysisMetronomeRaw?.gridDivision === 'string' ? analysisMetronomeRaw.gridDivision : '16',
-    downbeat1: analysisMetronomeRaw?.downbeat1 === null || analysisMetronomeRaw?.downbeat1 === undefined
-      ? NaN
-      : Number(analysisMetronomeRaw.downbeat1),
-    downbeat2: analysisMetronomeRaw?.downbeat2 === null || analysisMetronomeRaw?.downbeat2 === undefined
-      ? NaN
-      : Number(analysisMetronomeRaw.downbeat2),
     muted: !!analysisMetronomeRaw?.muted,
     solo: !!analysisMetronomeRaw?.solo
   };
@@ -478,12 +485,27 @@ async function pickSaveDirectory() {
   }
   try {
     const baseHandle = await window.showDirectoryPicker({ startIn: 'documents' });
-    state.saveDirectoryHandle = await baseHandle.getDirectoryHandle('music_note', { create: true });
+    state.saveDirectoryHandle = await resolveNotebookDirectoryHandle(baseHandle);
     updateSavePathInfo();
     return true;
   } catch {
     return false;
   }
+}
+
+async function resolveNotebookDirectoryHandle(baseHandle) {
+  if (!baseHandle) return null;
+  if (baseHandle.name === 'music_note') return baseHandle;
+
+  const directAudio = await getOptionalDirectoryHandle(baseHandle, PROJECT_AUDIO_DIR);
+  const directNotes = await getOptionalDirectoryHandle(baseHandle, PROJECT_NOTES_DIR);
+  if (directAudio || directNotes) return baseHandle;
+  try {
+    await baseHandle.getFileHandle('playlist.json');
+    return baseHandle;
+  } catch {}
+
+  return baseHandle.getDirectoryHandle('music_note', { create: true });
 }
 
 async function ensureNotebookDirectory() {
@@ -497,20 +519,15 @@ function isAudioFileName(name) {
 
 async function listSongDirectories() {
   if (!state.saveDirectoryHandle) return [];
-  const dirs = [];
-  for await (const entry of state.saveDirectoryHandle.values()) {
-    if (entry.kind !== 'directory') continue;
-    let hasAudio = false;
-    for await (const child of entry.values()) {
-      if (child.kind === 'file' && isAudioFileName(child.name)) {
-        hasAudio = true;
-        break;
-      }
-    }
-    if (hasAudio) dirs.push(entry.name);
+  const songs = [];
+  const { audioDir } = await getProjectSubdirs(state.saveDirectoryHandle, { create: false });
+  if (!audioDir) return songs;
+  for await (const entry of audioDir.values()) {
+    if (entry.kind !== 'file' || !isAudioFileName(entry.name)) continue;
+    songs.push(sanitizeFolderName(stripExtension(entry.name)));
   }
-  dirs.sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
-  return dirs;
+  songs.sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
+  return songs;
 }
 
 async function loadPlaylists() {
@@ -567,14 +584,72 @@ async function savePlaylists() {
   );
 }
 
+async function getOptionalDirectoryHandle(parentDir, name) {
+  try {
+    return await parentDir.getDirectoryHandle(name);
+  } catch {
+    return null;
+  }
+}
+
+async function getProjectSubdirs(projectDir, options = {}) {
+  const create = !!options.create;
+  let audioDir = null;
+  let notesDir = null;
+  if (create) {
+    audioDir = await projectDir.getDirectoryHandle(PROJECT_AUDIO_DIR, { create: true });
+    notesDir = await projectDir.getDirectoryHandle(PROJECT_NOTES_DIR, { create: true });
+  } else {
+    audioDir = await getOptionalDirectoryHandle(projectDir, PROJECT_AUDIO_DIR);
+    notesDir = await getOptionalDirectoryHandle(projectDir, PROJECT_NOTES_DIR);
+  }
+  return { audioDir, notesDir };
+}
+
+function getProjectAudioFilename(songName) {
+  return `${songName}${PROJECT_AUDIO_EXT}`;
+}
+
+function getProjectNotesFilename(songName) {
+  return `${songName}.json`;
+}
+
+async function readProjectNotesData(projectDir, songName = '') {
+  const { notesDir } = await getProjectSubdirs(projectDir, { create: false });
+  if (!notesDir) return null;
+  const normalizedSongName = sanitizeFolderName(songName || '');
+  const notesFilename = normalizedSongName ? getProjectNotesFilename(normalizedSongName) : '';
+  const preferredAudioName = normalizedSongName ? getProjectAudioFilename(normalizedSongName) : '';
+  if (notesFilename) {
+    try {
+      const notesHandle = await notesDir.getFileHandle(notesFilename);
+      return JSON.parse(await (await notesHandle.getFile()).text());
+    } catch {}
+  }
+  if (!preferredAudioName) return null;
+  for await (const entry of notesDir.values()) {
+    if (entry.kind !== 'file' || !/\.json$/i.test(entry.name)) continue;
+    try {
+      const parsed = JSON.parse(await (await entry.getFile()).text());
+      const audioName = typeof parsed?.audio === 'string' ? parsed.audio.trim() : '';
+      if (!audioName) continue;
+      if (audioName === preferredAudioName || audioName.toLowerCase() === preferredAudioName.toLowerCase()) {
+        return parsed;
+      }
+    } catch {}
+  }
+  return null;
+}
+
 async function readSongStats(songFolderName) {
   if (!state.saveDirectoryHandle) {
     return { commentLen: 0, noteCount: 0, segmentDurationSec: 0, markedNoteCount: 0 };
   }
   try {
-    const dirHandle = await state.saveDirectoryHandle.getDirectoryHandle(songFolderName);
-    const notesHandle = await dirHandle.getFileHandle('notes.json');
-    const parsed = JSON.parse(await (await notesHandle.getFile()).text());
+    const parsed = await readProjectNotesData(state.saveDirectoryHandle, songFolderName);
+    if (!parsed || typeof parsed !== 'object') {
+      return { commentLen: 0, noteCount: 0, segmentDurationSec: 0, markedNoteCount: 0 };
+    }
     const notes = Array.isArray(parsed?.notes) ? parsed.notes : [];
     const songText = typeof parsed?.song?.caption === 'string' ? parsed.song.caption : '';
     const noteTextLen = notes.reduce((sum, n) => sum + (typeof n?.caption === 'string' ? n.caption.length : 0), 0);
@@ -621,21 +696,66 @@ async function renameSongFolder(songName) {
   if (asked === null) return;
   const next = sanitizeFolderName(asked.trim());
   if (!next || next === songName) return;
-  try {
-    await state.saveDirectoryHandle.getDirectoryHandle(next);
+  const existingSongs = await listSongDirectories();
+  if (existingSongs.includes(next)) {
     alert('同名歌曲已存在');
     return;
-  } catch {}
+  }
 
   try {
-    const oldDir = await state.saveDirectoryHandle.getDirectoryHandle(songName);
-    const newDir = await state.saveDirectoryHandle.getDirectoryHandle(next, { create: true });
-    for await (const entry of oldDir.values()) {
-      if (entry.kind !== 'file') continue;
-      const src = await entry.getFile();
-      await writeBlobToDirectory(src, entry.name, newDir);
+    const { audioDir, notesDir } = await getProjectSubdirs(state.saveDirectoryHandle, { create: true });
+    const normalizedSongName = sanitizeFolderName(songName);
+    const targetAudioName = getProjectAudioFilename(next);
+    const targetNotesName = getProjectNotesFilename(next);
+    let sourceAudioEntry = null;
+    for await (const entry of audioDir.values()) {
+      if (entry.kind !== 'file' || !isAudioFileName(entry.name)) continue;
+      if (sanitizeFolderName(stripExtension(entry.name)) === normalizedSongName) {
+        sourceAudioEntry = entry;
+        break;
+      }
     }
-    await state.saveDirectoryHandle.removeEntry(songName, { recursive: true });
+    if (!sourceAudioEntry) {
+      alert('未找到要重命名的音频');
+      return;
+    }
+
+    const sourceAudioFile = await sourceAudioEntry.getFile();
+    const audioSaved = await writeBlobToDirectory(sourceAudioFile, targetAudioName, audioDir);
+    if (!audioSaved) {
+      alert('重命名歌曲失败');
+      return;
+    }
+    if (sourceAudioEntry.name !== targetAudioName) {
+      await audioDir.removeEntry(sourceAudioEntry.name);
+    }
+
+    let sourceNotesEntry = null;
+    let sourceNotesParsed = null;
+    for await (const entry of notesDir.values()) {
+      if (entry.kind !== 'file' || !/\.json$/i.test(entry.name)) continue;
+      try {
+        const parsed = JSON.parse(await (await entry.getFile()).text());
+        const audioName = typeof parsed?.audio === 'string' ? parsed.audio.trim() : '';
+        const exactByName = entry.name === getProjectNotesFilename(normalizedSongName);
+        const exactByAudio = audioName && audioName.toLowerCase() === getProjectAudioFilename(normalizedSongName).toLowerCase();
+        if (exactByName || exactByAudio) {
+          sourceNotesEntry = entry;
+          sourceNotesParsed = parsed;
+          break;
+        }
+      } catch {}
+    }
+
+    const notesPayload =
+      sourceNotesParsed && typeof sourceNotesParsed === 'object'
+        ? { ...sourceNotesParsed, audio: targetAudioName }
+        : { audio: targetAudioName, song: { tags: [], caption: '' }, notes: [] };
+    await saveTextFileToDirectory(targetNotesName, JSON.stringify(notesPayload, null, 2), notesDir);
+    if (sourceNotesEntry && sourceNotesEntry.name !== targetNotesName) {
+      await notesDir.removeEntry(sourceNotesEntry.name);
+    }
+
     state.playlists.forEach((p) => {
       p.songs = p.songs.map((s) => (s === songName ? next : s));
     });
@@ -681,6 +801,147 @@ function openTocMenu(evt, type, name) {
   ui.tocContextMenu.style.display = 'flex';
 }
 
+const BEGINNER_GUIDE_STEPS = [
+  {
+    page: 'toc',
+    target: '#importPlaylistFolder',
+    title: '导入歌单',
+    body: '请点击“导入歌单”。完成该操作后会自动进入下一步。',
+    event: 'guide-import-playlist-click'
+  },
+  {
+    page: 'toc',
+    target: '#createNewMusic',
+    title: '新建音乐',
+    body: '请点击“新建音乐”进入片段页。完成后自动下一步。',
+    event: 'guide-create-music-click'
+  },
+  {
+    page: 'notes',
+    target: '#createNoteFromRegion',
+    title: '创建大于5秒片段',
+    body: '先在波形里框选一个片段，再点击“+”。\n只有片段长度 >= 5 秒才算完成本步。',
+    event: 'guide-create-segment-at-least-5s'
+  },
+  {
+    page: 'editor',
+    target: '#goAnalysis',
+    title: '进入扒谱页',
+    body: '请点击“扒谱”进入扒谱页。完成后自动下一步。',
+    event: 'guide-enter-analysis-click'
+  },
+  {
+    page: 'analysis',
+    target: '.analysis-toolbar',
+    title: '扒谱页：顶部工具栏',
+    body: '请在顶部工具栏任意点击一次（播放/音量/工具等）。',
+    event: 'guide-analysis-toolbar-interact'
+  },
+  {
+    page: 'analysis',
+    target: '.analysis-metronome-panel',
+    title: '扒谱页：节拍器区',
+    body: '请在节拍器区域任意操作一次（BPM/拍号/网格/重拍标定）。',
+    event: 'guide-analysis-metronome-interact'
+  },
+  {
+    page: 'analysis',
+    target: '#analysisTrackList',
+    title: '扒谱页：轨道区',
+    body: '请在轨道区点选一次轨道（或轨道按钮）。',
+    event: 'guide-analysis-tracklist-interact'
+  },
+  {
+    page: 'analysis',
+    target: '#analysisNotes',
+    title: '创建音符',
+    body: '请将左键设为“铅笔”，并在音符画布空白处创建一个音符。',
+    event: 'guide-analysis-note-created'
+  },
+  {
+    page: 'analysis',
+    target: '#analysisNotes',
+    title: '编辑音符',
+    body: '请选中一个音符后拖动或拉伸它（移动/改时值均可）。',
+    event: 'guide-analysis-note-edited'
+  }
+];
+
+function getCurrentPageName() {
+  if (pages.home.classList.contains('active')) return 'home';
+  if (pages.toc.classList.contains('active')) return 'toc';
+  if (pages.record.classList.contains('active')) return 'record';
+  if (pages.trim.classList.contains('active')) return 'trim';
+  if (pages.notes.classList.contains('active')) return 'notes';
+  if (pages.editor.classList.contains('active')) return 'editor';
+  if (pages.analysis.classList.contains('active')) return 'analysis';
+  return 'toc';
+}
+
+function getGuideTargetRect(selector) {
+  const el = document.querySelector(selector);
+  if (!el) return null;
+  try {
+    el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+  } catch {}
+  const rect = el.getBoundingClientRect();
+  if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+  return rect;
+}
+
+function renderBeginnerGuideStep() {
+  if (!state.guideActive) return;
+  const step = BEGINNER_GUIDE_STEPS[state.guideStepIndex];
+  if (!step) return;
+  if (step.page && getCurrentPageName() !== step.page) {
+    showPage(step.page);
+  }
+  const rect = getGuideTargetRect(step.target) || {
+    left: window.innerWidth * 0.2,
+    top: window.innerHeight * 0.2,
+    width: window.innerWidth * 0.6,
+    height: window.innerHeight * 0.4
+  };
+  const pad = 8;
+  const left = Math.max(4, rect.left - pad);
+  const top = Math.max(4, rect.top - pad);
+  const width = Math.min(window.innerWidth - left - 4, rect.width + pad * 2);
+  const height = Math.min(window.innerHeight - top - 4, rect.height + pad * 2);
+  ui.guideSpotlight.style.left = `${left}px`;
+  ui.guideSpotlight.style.top = `${top}px`;
+  ui.guideSpotlight.style.width = `${width}px`;
+  ui.guideSpotlight.style.height = `${height}px`;
+  ui.guideTitle.textContent = step.title;
+  ui.guideBody.textContent = step.body;
+  ui.guideStep.textContent = `步骤 ${state.guideStepIndex + 1} / ${BEGINNER_GUIDE_STEPS.length}`;
+}
+
+function tryAdvanceBeginnerGuide(eventName) {
+  if (!state.guideActive) return;
+  const step = BEGINNER_GUIDE_STEPS[state.guideStepIndex];
+  if (!step || step.event !== eventName) return;
+  if (state.guideStepIndex >= BEGINNER_GUIDE_STEPS.length - 1) {
+    closeBeginnerGuide();
+    return;
+  }
+  state.guideStepIndex += 1;
+  requestAnimationFrame(renderBeginnerGuideStep);
+}
+
+function closeBeginnerGuide() {
+  state.guideActive = false;
+  ui.guideOverlay.classList.remove('open');
+  if (state.guideReturnPage) showPage(state.guideReturnPage);
+}
+
+function startBeginnerGuide() {
+  state.guideReturnPage = getCurrentPageName();
+  state.guideActive = true;
+  state.guideStepIndex = 0;
+  ui.guideOverlay.classList.add('open');
+  requestAnimationFrame(renderBeginnerGuideStep);
+}
+
 async function refreshTocList() {
   ui.playlistList.innerHTML = '';
   ui.songList.innerHTML = '';
@@ -689,6 +950,9 @@ async function refreshTocList() {
     li.textContent = '请在右上角设置保存目录';
     ui.playlistList.appendChild(li);
     ui.songListTitle.textContent = '目录';
+    const tip = document.createElement('li');
+    tip.textContent = '先设置保存目录，再开始导入歌单/新建音乐';
+    ui.songList.appendChild(tip);
     return;
   }
 
@@ -742,8 +1006,7 @@ async function refreshTocList() {
     meta.className = 'toc-meta';
     meta.textContent = `段落${segmentDurationSec.toFixed(2)}s · 音符${markedNoteCount}`;
     openBtn.addEventListener('click', async () => {
-      const dirHandle = await state.saveDirectoryHandle.getDirectoryHandle(songName);
-      await openNotesFromDirectoryHandle(dirHandle);
+      await openSongFromNotebook(songName);
     });
     row.addEventListener('contextmenu', (evt) => openTocMenu(evt, 'song', songName));
     row.appendChild(openBtn);
@@ -805,6 +1068,7 @@ async function importPlaylistFolder() {
 
   const playlist = getOrCreatePlaylist(playlistName);
   const allSongs = new Set(state.playlists.flatMap((p) => p.songs || []));
+  const { audioDir, notesDir } = await getProjectSubdirs(state.saveDirectoryHandle, { create: true });
   let importedCount = 0;
   let skippedCount = 0;
   for await (const entry of importDir.values()) {
@@ -821,26 +1085,26 @@ async function importPlaylistFolder() {
     let n = 2;
     while (true) {
       try {
-        await state.saveDirectoryHandle.getDirectoryHandle(folder);
+        await audioDir.getFileHandle(getProjectAudioFilename(folder));
         folder = `${base}_${n++}`;
       } catch {
         break;
       }
     }
-    const songDir = await state.saveDirectoryHandle.getDirectoryHandle(folder, { create: true });
-    await writeBlobToDirectory(audioFile, entry.name, songDir);
+    const targetAudioName = getProjectAudioFilename(folder);
+    await writeBlobToDirectory(audioFile, targetAudioName, audioDir);
     await saveTextFileToDirectory(
-      'notes.json',
+      getProjectNotesFilename(folder),
       JSON.stringify(
         {
-          audio: entry.name,
+          audio: targetAudioName,
           song: { tags: [], caption: '' },
           notes: []
         },
         null,
         2
       ),
-      songDir
+      notesDir
     );
     if (!playlist.songs.includes(folder)) playlist.songs.push(folder);
     allSongs.add(folder);
@@ -1676,9 +1940,9 @@ async function applyTrimFlow() {
   }
 }
 
-function makeNotesJson() {
+function makeNotesJson(audioNameOverride = null) {
   return {
-    audio: state.audioName || 'song.wav',
+    audio: audioNameOverride || state.audioName || 'song.wav',
     song: {
       tags: Array.from(state.songTagsDraft),
       caption: (state.songCaptionDraft || '').trim()
@@ -1714,12 +1978,6 @@ function makeNotesJson() {
         signature: typeof n?.analysisMetronome?.signature === 'string' ? n.analysisMetronome.signature : '4/4',
         offset: Number(n?.analysisMetronome?.offset ?? 0) || 0,
         gridDivision: typeof n?.analysisMetronome?.gridDivision === 'string' ? n.analysisMetronome.gridDivision : '16',
-        downbeat1: n?.analysisMetronome?.downbeat1 === null || n?.analysisMetronome?.downbeat1 === undefined
-          ? NaN
-          : Number(n.analysisMetronome.downbeat1),
-        downbeat2: n?.analysisMetronome?.downbeat2 === null || n?.analysisMetronome?.downbeat2 === undefined
-          ? NaN
-          : Number(n.analysisMetronome.downbeat2),
         muted: !!n?.analysisMetronome?.muted,
         solo: !!n?.analysisMetronome?.solo
       }
@@ -1734,12 +1992,14 @@ async function autoSaveProjectSilently() {
   await ensureAudioBlobData();
   const audioName = state.audioName || 'song.wav';
   const folderName = sanitizeFolderName(stripExtension(audioName));
-  const projectDir = await state.saveDirectoryHandle.getDirectoryHandle(folderName, { create: true });
+  const { audioDir, notesDir } = await getProjectSubdirs(state.saveDirectoryHandle, { create: true });
+  const targetAudioName = getProjectAudioFilename(folderName);
+  const targetNotesName = getProjectNotesFilename(folderName);
   const audioBlob = state.audioBlobData
     ? new Blob([state.audioBlobData], { type: state.audioBlob?.type || 'audio/wav' })
     : state.audioBlob;
-  await writeBlobToDirectory(audioBlob, audioName, projectDir);
-  await saveTextFileToDirectory('notes.json', JSON.stringify(makeNotesJson(), null, 2), projectDir);
+  await writeBlobToDirectory(audioBlob, targetAudioName, audioDir);
+  await saveTextFileToDirectory(targetNotesName, JSON.stringify(makeNotesJson(targetAudioName), null, 2), notesDir);
   const playlist = getOrCreatePlaylist(state.selectedPlaylist || '默认');
   if (!playlist.songs.includes(folderName)) playlist.songs.push(folderName);
   await savePlaylists();
@@ -1759,25 +2019,27 @@ async function saveProjectToDirectory() {
   await ensureAudioBlobData();
   const audioName = state.audioName || 'song.wav';
   const folderName = sanitizeFolderName(stripExtension(audioName));
-  const projectDir = await state.saveDirectoryHandle.getDirectoryHandle(folderName, { create: true });
+  const { audioDir, notesDir } = await getProjectSubdirs(state.saveDirectoryHandle, { create: true });
+  const targetAudioName = getProjectAudioFilename(folderName);
+  const targetNotesName = getProjectNotesFilename(folderName);
 
   const audioBlob = state.audioBlobData
     ? new Blob([state.audioBlobData], { type: state.audioBlob?.type || 'audio/wav' })
     : state.audioBlob;
-  const audioSaved = await writeBlobToDirectory(audioBlob, audioName, projectDir);
-  const notesSaved = await saveTextFileToDirectory('notes.json', JSON.stringify(makeNotesJson(), null, 2), projectDir);
+  const audioSaved = await writeBlobToDirectory(audioBlob, targetAudioName, audioDir);
+  const notesSaved = await saveTextFileToDirectory(targetNotesName, JSON.stringify(makeNotesJson(targetAudioName), null, 2), notesDir);
 
   let sourceMsg = '未处理原音频';
   const action = await askSourceActionWithModal();
   if (state.sourceAudioBlob && state.sourceAudioName && action !== 'skip') {
-    const sourceSaved = await writeBlobToDirectory(state.sourceAudioBlob, state.sourceAudioName, projectDir);
+    const sourceSaved = await writeBlobToDirectory(state.sourceAudioBlob, state.sourceAudioName, audioDir);
     if (sourceSaved) {
       if (action === 'move') {
         let removed = false;
         const canRemove =
           state.sourceParentDirHandle &&
           state.sourceFileName &&
-          state.sourceParentDirHandle !== projectDir;
+          state.sourceParentDirHandle !== audioDir;
         if (canRemove) {
           try {
             await state.sourceParentDirHandle.removeEntry(state.sourceFileName);
@@ -1801,7 +2063,7 @@ async function saveProjectToDirectory() {
     const playlist = getOrCreatePlaylist(state.selectedPlaylist || '默认');
     if (!playlist.songs.includes(folderName)) playlist.songs.push(folderName);
     await savePlaylists();
-    alert(`已保存到目录：${folderName}/\n- ${audioName}\n- notes.json\n${sourceMsg}`);
+    alert(`已保存到目录：music_note/\n- audio/${targetAudioName}\n- notes/${targetNotesName}\n${sourceMsg}`);
     refreshTocList();
   } else {
     alert('保存失败，请检查目录权限后重试');
@@ -1832,37 +2094,38 @@ async function importProjectFiles(files) {
   turnPage('notes', 'next');
 }
 
-async function openNotesFromDirectoryHandle(dirHandle) {
+async function openSongFromNotebook(songName) {
   try {
     let notes = [];
     let notesAudioName = '';
     let songInfo = { tags: [], caption: '' };
-    const audioFiles = [];
-
-    for await (const entry of dirHandle.values()) {
-      if (entry.kind !== 'file') continue;
-      const lower = entry.name.toLowerCase();
-      if (lower === 'notes.json') {
-        const f = await entry.getFile();
-        const parsed = JSON.parse(await f.text());
-        notes = Array.isArray(parsed.notes) ? parsed.notes.map(normalizeNote) : [];
-        notesAudioName = typeof parsed.audio === 'string' ? parsed.audio : '';
-        if (parsed.song && typeof parsed.song === 'object') {
-          songInfo = {
-            tags: Array.isArray(parsed.song.tags) ? parsed.song.tags.filter((v) => typeof v === 'string') : [],
-            caption: typeof parsed.song.caption === 'string' ? parsed.song.caption : ''
-          };
-        }
-        continue;
-      }
-      if (/\.(wav|mp3|m4a|ogg|flac)$/i.test(entry.name)) {
-        audioFiles.push(entry);
+    const parsed = await readProjectNotesData(state.saveDirectoryHandle, songName);
+    if (parsed && typeof parsed === 'object') {
+      notes = Array.isArray(parsed.notes) ? parsed.notes.map(normalizeNote) : [];
+      notesAudioName = typeof parsed.audio === 'string' ? parsed.audio : '';
+      if (parsed.song && typeof parsed.song === 'object') {
+        songInfo = {
+          tags: Array.isArray(parsed.song.tags) ? parsed.song.tags.filter((v) => typeof v === 'string') : [],
+          caption: typeof parsed.song.caption === 'string' ? parsed.song.caption : ''
+        };
       }
     }
 
+    const audioFiles = [];
+    const { audioDir } = await getProjectSubdirs(state.saveDirectoryHandle, { create: false });
+    if (audioDir) {
+      for await (const entry of audioDir.values()) {
+        if (entry.kind !== 'file' || !/\.(wav|mp3|m4a|ogg|flac)$/i.test(entry.name)) continue;
+        audioFiles.push({ entry, parentDir: audioDir });
+      }
+    }
+
+    const defaultAudioName = getProjectAudioFilename(songName);
+    const preferAudioName = notesAudioName || defaultAudioName;
     const picked =
-      audioFiles.find((h) => h.name === notesAudioName) ||
-      audioFiles.find((h) => h.name.toLowerCase() === notesAudioName.toLowerCase()) ||
+      audioFiles.find((h) => h.entry.name === preferAudioName) ||
+      audioFiles.find((h) => h.entry.name.toLowerCase() === preferAudioName.toLowerCase()) ||
+      audioFiles.find((h) => sanitizeFolderName(stripExtension(h.entry.name)) === sanitizeFolderName(songName)) ||
       audioFiles[0];
 
     if (!picked) {
@@ -1870,8 +2133,8 @@ async function openNotesFromDirectoryHandle(dirHandle) {
       return;
     }
 
-    const file = await picked.getFile();
-    setSourceAudio(file, file.name, { parentDirHandle: dirHandle, fileName: picked.name });
+    const file = await picked.entry.getFile();
+    setSourceAudio(file, file.name, { parentDirHandle: picked.parentDir, fileName: picked.entry.name });
     loadAudioBlob(file, file.name);
     state.notes = notes;
     state.songTagsDraft = Array.from(new Set(songInfo.tags));
@@ -1883,8 +2146,8 @@ async function openNotesFromDirectoryHandle(dirHandle) {
     initWave();
     turnPage('notes', 'next');
   } catch {
-    console.error('打开目录失败', dirHandle);
-    alert('打开目录失败');
+    console.error('打开歌曲失败', songName);
+    alert('打开歌曲失败');
   }
 }
 
@@ -2501,8 +2764,6 @@ function openEditorWithCurrentRegion() {
     signature: '4/4',
     offset: 0,
     gridDivision: '16',
-    downbeat1: NaN,
-    downbeat2: NaN,
     muted: false,
     solo: false
   };
@@ -2550,12 +2811,6 @@ function openEditorForNoteIndex(index) {
     signature: typeof note?.analysisMetronome?.signature === 'string' ? note.analysisMetronome.signature : '4/4',
     offset: Number(note?.analysisMetronome?.offset ?? 0) || 0,
     gridDivision: typeof note?.analysisMetronome?.gridDivision === 'string' ? note.analysisMetronome.gridDivision : '16',
-    downbeat1: note?.analysisMetronome?.downbeat1 === null || note?.analysisMetronome?.downbeat1 === undefined
-      ? NaN
-      : Number(note.analysisMetronome.downbeat1),
-    downbeat2: note?.analysisMetronome?.downbeat2 === null || note?.analysisMetronome?.downbeat2 === undefined
-      ? NaN
-      : Number(note.analysisMetronome.downbeat2),
     muted: !!note?.analysisMetronome?.muted,
     solo: !!note?.analysisMetronome?.solo
   };
@@ -2607,8 +2862,6 @@ function saveNoteEntry(nextPage = 'notes') {
       signature: typeof state.pendingAnalysisMetronome?.signature === 'string' ? state.pendingAnalysisMetronome.signature : '4/4',
       offset: Number(state.pendingAnalysisMetronome?.offset ?? 0) || 0,
       gridDivision: typeof state.pendingAnalysisMetronome?.gridDivision === 'string' ? state.pendingAnalysisMetronome.gridDivision : '16',
-      downbeat1: Number(state.pendingAnalysisMetronome?.downbeat1),
-      downbeat2: Number(state.pendingAnalysisMetronome?.downbeat2),
       muted: !!state.pendingAnalysisMetronome?.muted,
       solo: !!state.pendingAnalysisMetronome?.solo
     }
@@ -2679,6 +2932,12 @@ ui.settingsBtn.addEventListener('click', (evt) => {
   evt.stopPropagation();
   ui.settingsPanel.classList.toggle('open');
 });
+if (ui.startGuideInSettings) {
+  ui.startGuideInSettings.addEventListener('click', () => {
+    ui.settingsPanel.classList.remove('open');
+    startBeginnerGuide();
+  });
+}
 ui.changeSaveDir.addEventListener('click', async () => {
   const ok = await pickSaveDirectory();
   if (ok) refreshTocList();
@@ -2774,6 +3033,58 @@ ui.closeTagPicker.addEventListener('click', closeTagPicker);
 ui.tagPickerModal.addEventListener('click', (evt) => {
   if (evt.target === ui.tagPickerModal) closeTagPicker();
 });
+if (ui.guideClose) {
+  ui.guideClose.addEventListener('click', closeBeginnerGuide);
+}
+window.addEventListener('resize', () => {
+  if (!state.guideActive) return;
+  requestAnimationFrame(renderBeginnerGuideStep);
+});
+if (ui.importPlaylistFolder) {
+  ui.importPlaylistFolder.addEventListener('click', () => tryAdvanceBeginnerGuide('guide-import-playlist-click'));
+}
+if (ui.createNewMusic) {
+  ui.createNewMusic.addEventListener('click', () => tryAdvanceBeginnerGuide('guide-create-music-click'));
+}
+if (ui.createNoteFromRegion) {
+  ui.createNoteFromRegion.addEventListener('click', () => {
+    const start = Number(state.activeRegion?.start ?? state.pendingNoteRange?.start ?? 0);
+    const end = Number(state.activeRegion?.end ?? state.pendingNoteRange?.end ?? start);
+    const dur = Math.max(0, end - start);
+    if (dur >= 5) {
+      tryAdvanceBeginnerGuide('guide-create-segment-at-least-5s');
+    } else if (state.guideActive) {
+      const step = BEGINNER_GUIDE_STEPS[state.guideStepIndex];
+      if (step?.event === 'guide-create-segment-at-least-5s') {
+        ui.guideBody.textContent = '当前片段小于 5 秒，请重新框选更长片段后再点“+”。';
+      }
+    }
+  });
+}
+if (ui.goAnalysis) {
+  ui.goAnalysis.addEventListener('click', () => tryAdvanceBeginnerGuide('guide-enter-analysis-click'));
+}
+document.addEventListener('pointerdown', (evt) => {
+  if (!state.guideActive) return;
+  const step = BEGINNER_GUIDE_STEPS[state.guideStepIndex];
+  if (!step) return;
+  const t = evt.target;
+  if (step.event === 'guide-analysis-toolbar-interact' && t.closest?.('.analysis-toolbar')) {
+    tryAdvanceBeginnerGuide('guide-analysis-toolbar-interact');
+  } else if (step.event === 'guide-analysis-metronome-interact' && t.closest?.('.analysis-metronome-panel')) {
+    tryAdvanceBeginnerGuide('guide-analysis-metronome-interact');
+  } else if (step.event === 'guide-analysis-tracklist-interact' && t.closest?.('#analysisTrackList')) {
+    tryAdvanceBeginnerGuide('guide-analysis-tracklist-interact');
+  }
+}, true);
+document.addEventListener('guide-action', (evt) => {
+  const type = evt?.detail?.type;
+  if (type === 'analysis-note-created') {
+    tryAdvanceBeginnerGuide('guide-analysis-note-created');
+  } else if (type === 'analysis-note-edited') {
+    tryAdvanceBeginnerGuide('guide-analysis-note-edited');
+  }
+});
 ui.songCaption.addEventListener('input', () => {
   state.songCaptionDraft = ui.songCaption.value;
 });
@@ -2807,8 +3118,7 @@ ui.tocMenuOpen.addEventListener('click', async () => {
     state.selectedPlaylist = t.name;
     await refreshTocList();
   } else if (t.type === 'song' && state.saveDirectoryHandle) {
-    const dirHandle = await state.saveDirectoryHandle.getDirectoryHandle(t.name);
-    await openNotesFromDirectoryHandle(dirHandle);
+    await openSongFromNotebook(t.name);
   }
   hideContextMenu();
 });

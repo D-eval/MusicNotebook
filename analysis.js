@@ -456,8 +456,7 @@ function loadAnalysisNotesForTarget() {
   state.analysisMetronomeSignature = normalizeMetronomeSignature(metro?.signature ?? state.analysisMetronomeSignature ?? '4/4');
   state.analysisMetronomeOffset = Number(metro?.offset ?? state.analysisMetronomeOffset ?? 0) || 0;
   state.analysisGridDivision = normalizeAnalysisGridDivision(metro?.gridDivision ?? state.analysisGridDivision ?? '16');
-  state.analysisDownbeatFirst = (metro?.downbeat1 === null || metro?.downbeat1 === undefined) ? NaN : Number(metro.downbeat1);
-  state.analysisDownbeatSecond = (metro?.downbeat2 === null || metro?.downbeat2 === undefined) ? NaN : Number(metro.downbeat2);
+  syncDownbeatsFromMeter();
   state.analysisMetronomeMuted = !!metro?.muted;
   state.analysisMetronomeSolo = !!metro?.solo;
   if (ui.analysisMetronomeBpm) ui.analysisMetronomeBpm.value = String(state.analysisMetronomeBpm);
@@ -477,8 +476,6 @@ function persistAnalysisNotesToTarget() {
     signature: normalizeMetronomeSignature(state.analysisMetronomeSignature ?? '4/4'),
     offset: Number(state.analysisMetronomeOffset ?? 0) || 0,
     gridDivision: normalizeAnalysisGridDivision(state.analysisGridDivision ?? '16'),
-    downbeat1: Number(state.analysisDownbeatFirst),
-    downbeat2: Number(state.analysisDownbeatSecond),
     muted: !!state.analysisMetronomeMuted,
     solo: !!state.analysisMetronomeSolo
   };
@@ -2245,7 +2242,8 @@ ui.analysisBack.addEventListener('click', () => {
   persistAnalysisNotesToTarget();
   if (state.saveDirectoryHandle) {
     autoSaveProjectSilently();
-    setStatus('扒谱已保存到 notes.json');
+    const musicName = sanitizeFolderName(stripExtension(state.audioName || 'music'));
+    setStatus(`扒谱已保存到 notes/${musicName}.json`);
   } else {
     setStatus('扒谱已保存到当前片段（未选择保存目录）');
   }
@@ -2413,7 +2411,8 @@ async function runAnalysisMenuAction(action) {
     persistAnalysisNotesToTarget();
     if (state.saveDirectoryHandle) {
       await autoSaveProjectSilently();
-      setStatus('扒谱已保存到 notes.json');
+      const musicName = sanitizeFolderName(stripExtension(state.audioName || 'music'));
+      setStatus(`扒谱已保存到 notes/${musicName}.json`);
     } else {
       setStatus('扒谱已保存到当前片段（未选择保存目录）');
     }
@@ -2638,6 +2637,7 @@ if (ui.analysisNotes) {
         state.analysisSelectedTrackId = activeTrack.id;
         state.analysisLastSustain = Math.max(0.02, note.end - note.start);
         playNotePreview(note.midi, note.velocity, activeTrack.type, Math.max(0.06, note.end - note.start));
+        document.dispatchEvent(new CustomEvent('guide-action', { detail: { type: 'analysis-note-created' } }));
         state.analysisDrag = {
           id: note.id,
           trackId: activeTrack.id,
@@ -2714,6 +2714,7 @@ if (ui.analysisNotes) {
       note.start = drag.start + dt;
       note.end = drag.end + dt;
       note.midi = drag.midi + dmidi;
+      document.dispatchEvent(new CustomEvent('guide-action', { detail: { type: 'analysis-note-edited' } }));
       if (note.midi !== drag.lastMidi) {
         playNotePreview(note.midi, note.velocity, track?.type || 'pitch', Math.max(0.06, note.end - note.start));
         drag.lastMidi = note.midi;
@@ -2721,9 +2722,11 @@ if (ui.analysisNotes) {
     } else if (drag.mode === 'resize-left') {
       const t = xToTime(x, width);
       note.start = Math.min(t, note.end - 0.02);
+      document.dispatchEvent(new CustomEvent('guide-action', { detail: { type: 'analysis-note-edited' } }));
     } else if (drag.mode === 'resize-right') {
       const t = xToTime(x, width);
       note.end = Math.max(t, note.start + 0.02);
+      document.dispatchEvent(new CustomEvent('guide-action', { detail: { type: 'analysis-note-edited' } }));
     }
     drawAnalysisNotes();
   });
