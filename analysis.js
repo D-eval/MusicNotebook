@@ -348,6 +348,7 @@ function setActiveAnalysisTrack(trackId) {
   state.analysisNotes = track ? track.notes : [];
   state.analysisSelectedId = null;
   state.analysisSelectedTrackId = null;
+  stopSelectedNotePreview();
   renderAnalysisTracks();
   drawAnalysisNotes();
 }
@@ -711,7 +712,7 @@ function drawAnalysisMetronomeGrid(ctx, width, height) {
         subdivIndex += 1;
         ts += subdivSec;
       }
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
       ctx.lineWidth = 1;
       while (ts <= viewEnd) {
         if ((subdivIndex % subdivStep) === 0 && (subdivIndex % subdivPerBeat) !== 0) {
@@ -1864,6 +1865,63 @@ function playNotePreview(midi, velocity = 0.7, type = 'pitch', duration = 0.12) 
   osc.onended = () => ctx.close();
 }
 
+function stopSelectedNotePreview() {
+  const preview = state.analysisSelectedPreview;
+  if (!preview) return;
+  state.analysisSelectedPreview = null;
+  try {
+    preview.gain.gain.cancelScheduledValues(preview.ctx.currentTime);
+    preview.gain.gain.setTargetAtTime(0.0001, preview.ctx.currentTime, 0.015);
+  } catch {}
+  try {
+    preview.osc.stop(preview.ctx.currentTime + 0.03);
+  } catch {}
+  try {
+    preview.ctx.close();
+  } catch {}
+}
+
+function startSelectedNotePreview(midi, velocity = 0.7, type = 'pitch') {
+  if (type === 'silent') {
+    stopSelectedNotePreview();
+    return;
+  }
+  if (type === 'transient') {
+    stopSelectedNotePreview();
+    playNotePreview(midi, velocity, type, 0.12);
+    return;
+  }
+  stopSelectedNotePreview();
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  const freq = 440 * Math.pow(2, (midi - 69) / 12);
+  const previewVol = getAnalysisPreviewVolume();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(freq, ctx.currentTime);
+  gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+  gain.gain.linearRampToValueAtTime(0.12 * clamp(velocity, 0, 1) * previewVol, ctx.currentTime + 0.02);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(ctx.currentTime);
+  state.analysisSelectedPreview = { ctx, osc, gain, type: 'pitch' };
+}
+
+function updateSelectedNotePreview(midi, velocity = 0.7, type = 'pitch') {
+  if (type !== 'pitch') {
+    startSelectedNotePreview(midi, velocity, type);
+    return;
+  }
+  const preview = state.analysisSelectedPreview;
+  if (!preview || preview.type !== 'pitch') {
+    startSelectedNotePreview(midi, velocity, type);
+    return;
+  }
+  const freq = 440 * Math.pow(2, (midi - 69) / 12);
+  const targetGain = 0.12 * clamp(velocity, 0, 1) * getAnalysisPreviewVolume();
+  preview.osc.frequency.setTargetAtTime(freq, preview.ctx.currentTime, 0.01);
+  preview.gain.gain.setTargetAtTime(targetGain, preview.ctx.currentTime, 0.01);
+}
+
 function drawAnalysisSpectrogram() {
   if (!ui.analysisSpec || !state.analysisSpecData) return;
   const { matrix, frames, bins, stride, windowLen, sampleRate, offset: rangeOffset } = state.analysisSpecData;
@@ -2250,6 +2308,7 @@ ui.analysisBack.addEventListener('click', () => {
   resetAnalysisAudio();
   showPage('editor', 'editor-grow');
   hideVelocitySlider();
+  stopSelectedNotePreview();
   stopAnalysisSynth();
 });
 
@@ -2475,6 +2534,7 @@ document.addEventListener('keydown', (evt) => {
       }
       state.analysisSelectedId = null;
       state.analysisSelectedTrackId = null;
+      stopSelectedNotePreview();
       drawAnalysisNotes();
     }
   }
@@ -2553,6 +2613,7 @@ if (ui.analysisNotes) {
         }
         state.analysisSelectedId = null;
         state.analysisSelectedTrackId = null;
+        stopSelectedNotePreview();
         drawAnalysisNotes();
       }
       return;
@@ -2563,7 +2624,7 @@ if (ui.analysisNotes) {
         state.analysisSelectedId = hit.note.id;
         state.analysisSelectedTrackId = hit.track.id;
         state.analysisLastSustain = Math.max(0.02, hit.note.end - hit.note.start);
-        playNotePreview(hit.note.midi, hit.note.velocity, hit.track.type, Math.max(0.06, hit.note.end - hit.note.start));
+        startSelectedNotePreview(hit.note.midi, hit.note.velocity, hit.track.type);
         const edge = 6;
         let mode = 'move';
         if (Math.abs(x - hit.x0) <= edge) mode = 'resize-left';
@@ -2583,6 +2644,7 @@ if (ui.analysisNotes) {
       } else {
         state.analysisSelectedId = null;
         state.analysisSelectedTrackId = null;
+        stopSelectedNotePreview();
         state.analysisDrag = {
           id: null,
           mode: 'pan',
@@ -2603,7 +2665,7 @@ if (ui.analysisNotes) {
         state.analysisSelectedId = hit.note.id;
         state.analysisSelectedTrackId = hit.track.id;
         state.analysisLastSustain = Math.max(0.02, hit.note.end - hit.note.start);
-        playNotePreview(hit.note.midi, hit.note.velocity, hit.track.type, Math.max(0.06, hit.note.end - hit.note.start));
+        startSelectedNotePreview(hit.note.midi, hit.note.velocity, hit.track.type);
         const edge = 6;
         let mode = 'move';
         if (Math.abs(x - hit.x0) <= edge) mode = 'resize-left';
@@ -2636,7 +2698,7 @@ if (ui.analysisNotes) {
         state.analysisSelectedId = note.id;
         state.analysisSelectedTrackId = activeTrack.id;
         state.analysisLastSustain = Math.max(0.02, note.end - note.start);
-        playNotePreview(note.midi, note.velocity, activeTrack.type, Math.max(0.06, note.end - note.start));
+        startSelectedNotePreview(note.midi, note.velocity, activeTrack.type);
         document.dispatchEvent(new CustomEvent('guide-action', { detail: { type: 'analysis-note-created' } }));
         state.analysisDrag = {
           id: note.id,
@@ -2716,7 +2778,7 @@ if (ui.analysisNotes) {
       note.midi = drag.midi + dmidi;
       document.dispatchEvent(new CustomEvent('guide-action', { detail: { type: 'analysis-note-edited' } }));
       if (note.midi !== drag.lastMidi) {
-        playNotePreview(note.midi, note.velocity, track?.type || 'pitch', Math.max(0.06, note.end - note.start));
+        updateSelectedNotePreview(note.midi, note.velocity, track?.type || 'pitch');
         drag.lastMidi = note.midi;
       }
     } else if (drag.mode === 'resize-left') {

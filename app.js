@@ -517,17 +517,50 @@ function isAudioFileName(name) {
   return /\.(wav|mp3|m4a|ogg|flac)$/i.test(name || '');
 }
 
+function isMp3FileName(name) {
+  return /\.mp3$/i.test(name || '');
+}
+
 async function listSongDirectories() {
   if (!state.saveDirectoryHandle) return [];
-  const songs = [];
+  const songs = new Set();
   const { audioDir } = await getProjectSubdirs(state.saveDirectoryHandle, { create: false });
-  if (!audioDir) return songs;
-  for await (const entry of audioDir.values()) {
-    if (entry.kind !== 'file' || !isAudioFileName(entry.name)) continue;
-    songs.push(sanitizeFolderName(stripExtension(entry.name)));
+  if (audioDir) {
+    for await (const entry of audioDir.values()) {
+      if (entry.kind !== 'file' || !isAudioFileName(entry.name)) continue;
+      songs.add(sanitizeFolderName(stripExtension(entry.name)));
+    }
   }
-  songs.sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
-  return songs;
+
+  // Legacy layout fallback:
+  // - music_note/{song_name}/{song_name}.mp3
+  // - music_note/{song_name}/audio/{song_name}.mp3
+  for await (const entry of state.saveDirectoryHandle.values()) {
+    if (entry.kind !== 'directory') continue;
+    if (entry.name === PROJECT_AUDIO_DIR || entry.name === PROJECT_NOTES_DIR) continue;
+
+    let hasAudio = false;
+    for await (const child of entry.values()) {
+      if (child.kind === 'file' && isAudioFileName(child.name)) {
+        hasAudio = true;
+        break;
+      }
+    }
+    if (!hasAudio) {
+      const legacyAudioDir = await getOptionalDirectoryHandle(entry, PROJECT_AUDIO_DIR);
+      if (legacyAudioDir) {
+        for await (const child of legacyAudioDir.values()) {
+          if (child.kind === 'file' && isAudioFileName(child.name)) {
+            hasAudio = true;
+            break;
+          }
+        }
+      }
+    }
+    if (hasAudio) songs.add(sanitizeFolderName(entry.name));
+  }
+
+  return Array.from(songs).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
 }
 
 async function loadPlaylists() {
@@ -557,6 +590,15 @@ async function loadPlaylists() {
 
   if (!playlists.length) playlists = [{ name: '默认', songs: [] }];
   if (!playlists.find((p) => p.name === '默认')) playlists.unshift({ name: '默认', songs: [] });
+
+  // Avoid wiping playlist memberships when song scan fails.
+  if (!songDirs.length) {
+    state.playlists = playlists;
+    if (!playlists.find((p) => p.name === state.selectedPlaylist)) {
+      state.selectedPlaylist = playlists[0].name;
+    }
+    return;
+  }
 
   const known = new Set(songDirs);
   playlists.forEach((p) => {
@@ -643,12 +685,12 @@ async function readProjectNotesData(projectDir, songName = '') {
 
 async function readSongStats(songFolderName) {
   if (!state.saveDirectoryHandle) {
-    return { commentLen: 0, noteCount: 0, segmentDurationSec: 0, markedNoteCount: 0 };
+    return { commentLen: 0, noteCount: 0, segmentDurationSec: 0, markedNoteCount: 0, longSegmentCount: 0 };
   }
   try {
     const parsed = await readProjectNotesData(state.saveDirectoryHandle, songFolderName);
     if (!parsed || typeof parsed !== 'object') {
-      return { commentLen: 0, noteCount: 0, segmentDurationSec: 0, markedNoteCount: 0 };
+      return { commentLen: 0, noteCount: 0, segmentDurationSec: 0, markedNoteCount: 0, longSegmentCount: 0 };
     }
     const notes = Array.isArray(parsed?.notes) ? parsed.notes : [];
     const songText = typeof parsed?.song?.caption === 'string' ? parsed.song.caption : '';
@@ -659,6 +701,11 @@ async function readSongStats(songFolderName) {
       const end = Number(n?.end ?? start);
       return sum + Math.max(0, end - start);
     }, 0);
+    const longSegmentCount = notes.reduce((sum, n) => {
+      const start = Number(n?.start ?? 0);
+      const end = Number(n?.end ?? start);
+      return sum + (Math.max(0, end - start) > 5 ? 1 : 0);
+    }, 0);
     const markedNoteCount = notes.reduce((sum, n) => {
       const tracks = Array.isArray(n?.analysisTracks) ? n.analysisTracks : [];
       const trackNotes = tracks.reduce((trackSum, t) => {
@@ -667,9 +714,9 @@ async function readSongStats(songFolderName) {
       }, 0);
       return sum + trackNotes;
     }, 0);
-    return { commentLen: songText.length + noteTextLen, noteCount, segmentDurationSec, markedNoteCount };
+    return { commentLen: songText.length + noteTextLen, noteCount, segmentDurationSec, markedNoteCount, longSegmentCount };
   } catch {
-    return { commentLen: 0, noteCount: 0, segmentDurationSec: 0, markedNoteCount: 0 };
+    return { commentLen: 0, noteCount: 0, segmentDurationSec: 0, markedNoteCount: 0, longSegmentCount: 0 };
   }
 }
 
@@ -1000,11 +1047,11 @@ async function refreshTocList() {
     const openBtn = document.createElement('button');
     openBtn.type = 'button';
     openBtn.className = 'toc-item name-btn';
-    const { segmentDurationSec, markedNoteCount } = await readSongStats(songName);
+    const { segmentDurationSec, markedNoteCount, longSegmentCount } = await readSongStats(songName);
     openBtn.textContent = songName;
     const meta = document.createElement('span');
     meta.className = 'toc-meta';
-    meta.textContent = `段落${segmentDurationSec.toFixed(2)}s · 音符${markedNoteCount}`;
+    meta.textContent = `段落${segmentDurationSec.toFixed(2)}s · 音符${markedNoteCount} · 片段${longSegmentCount}`;
     openBtn.addEventListener('click', async () => {
       await openSongFromNotebook(songName);
     });
@@ -1072,7 +1119,8 @@ async function importPlaylistFolder() {
   let importedCount = 0;
   let skippedCount = 0;
   for await (const entry of importDir.values()) {
-    if (entry.kind !== 'file' || !isAudioFileName(entry.name)) continue;
+    // Import playlist from exactly: {dir}/*.mp3 (non-recursive).
+    if (entry.kind !== 'file' || !isMp3FileName(entry.name)) continue;
     const audioFile = await entry.getFile();
     const base = sanitizeFolderName(stripExtension(entry.name));
     const sameSongRegex = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:_\\d+)?$`);
