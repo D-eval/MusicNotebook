@@ -97,7 +97,8 @@ const ROOT_THRESHOLD_SEC = 0.05;
 const BEAT_THRESHOLD_SEC = 0.05;
 const CREATE_DRAG_DEADZONE_PX = 6;
 const TRACK_NAME_PRESETS = ['<root>', '<chord>', '<tonic>', '<beat>',
-  "<atomsphere>", "<use_beat>", "<rootless>"
+  "<atomsphere>", "<use_beat>", "<rootless>",
+  "<growlbass>"
 ];
 const DEFAULT_ANALYSIS_TRACKS = [
   { name: '<beat>', type: 'transient' },

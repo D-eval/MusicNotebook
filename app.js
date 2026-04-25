@@ -1013,20 +1013,73 @@ async function refreshTocList() {
     return;
   }
 
+  const allSongsInAllPlaylists = Array.from(new Set(state.playlists.flatMap((p) => p.songs || [])));
+  const songStatsEntries = await Promise.all(
+    allSongsInAllPlaylists.map(async (songName) => [songName, await readSongStats(songName)])
+  );
+  const songStatsMap = new Map(songStatsEntries);
+  const overallStats = allSongsInAllPlaylists.reduce(
+    (acc, songName) => {
+      const st = songStatsMap.get(songName) || {
+        segmentDurationSec: 0,
+        markedNoteCount: 0,
+        longSegmentCount: 0
+      };
+      acc.segmentDurationSec += Number(st.segmentDurationSec || 0);
+      acc.markedNoteCount += Number(st.markedNoteCount || 0);
+      acc.longSegmentCount += Number(st.longSegmentCount || 0);
+      return acc;
+    },
+    { segmentDurationSec: 0, markedNoteCount: 0, longSegmentCount: 0 }
+  );
+  ui.songListTitle.textContent = `${state.selectedPlaylist} / 目录`;
+
+  const overallLi = document.createElement('li');
+  const overallRow = document.createElement('div');
+  overallRow.className = 'toc-row toc-overall-row';
+  const overallText = document.createElement('span');
+  overallText.className = 'toc-overall-text';
+  overallText.textContent =
+    `总体统计：段落${overallStats.segmentDurationSec.toFixed(2)}s · 音符${overallStats.markedNoteCount} · >5秒片段${overallStats.longSegmentCount}`;
+  overallRow.appendChild(overallText);
+  overallLi.appendChild(overallRow);
+  ui.playlistList.appendChild(overallLi);
+
   state.playlists.forEach((playlist) => {
+    const playlistSongs = Array.from(new Set(playlist.songs || []));
+    const playlistStats = playlistSongs.reduce(
+      (acc, songName) => {
+        const st = songStatsMap.get(songName) || {
+          segmentDurationSec: 0,
+          markedNoteCount: 0,
+          longSegmentCount: 0
+        };
+        acc.segmentDurationSec += Number(st.segmentDurationSec || 0);
+        acc.markedNoteCount += Number(st.markedNoteCount || 0);
+        acc.longSegmentCount += Number(st.longSegmentCount || 0);
+        return acc;
+      },
+      { segmentDurationSec: 0, markedNoteCount: 0, longSegmentCount: 0 }
+    );
+
     const li = document.createElement('li');
     const row = document.createElement('div');
     row.className = 'toc-row';
     const openBtn = document.createElement('button');
     openBtn.type = 'button';
     openBtn.className = 'toc-item name-btn';
-    openBtn.textContent = `${playlist.name} (${playlist.songs.length})`;
+    openBtn.textContent = `${playlist.name} (${playlistSongs.length})`;
+    const meta = document.createElement('span');
+    meta.className = 'toc-meta';
+    meta.textContent =
+      `段落${playlistStats.segmentDurationSec.toFixed(2)}s · 音符${playlistStats.markedNoteCount} · >5秒片段${playlistStats.longSegmentCount}`;
     openBtn.addEventListener('click', async () => {
       state.selectedPlaylist = playlist.name;
       await refreshTocList();
     });
     row.addEventListener('contextmenu', (evt) => openTocMenu(evt, 'playlist', playlist.name));
     row.appendChild(openBtn);
+    row.appendChild(meta);
     li.appendChild(row);
     ui.playlistList.appendChild(li);
   });
@@ -1047,11 +1100,15 @@ async function refreshTocList() {
     const openBtn = document.createElement('button');
     openBtn.type = 'button';
     openBtn.className = 'toc-item name-btn';
-    const { segmentDurationSec, markedNoteCount, longSegmentCount } = await readSongStats(songName);
+    const {
+      segmentDurationSec,
+      markedNoteCount,
+      longSegmentCount
+    } = songStatsMap.get(songName) || await readSongStats(songName);
     openBtn.textContent = songName;
     const meta = document.createElement('span');
     meta.className = 'toc-meta';
-    meta.textContent = `段落${segmentDurationSec.toFixed(2)}s · 音符${markedNoteCount} · 片段${longSegmentCount}`;
+    meta.textContent = `段落${segmentDurationSec.toFixed(2)}s · 音符${markedNoteCount} · >5秒片段${longSegmentCount}`;
     openBtn.addEventListener('click', async () => {
       await openSongFromNotebook(songName);
     });
