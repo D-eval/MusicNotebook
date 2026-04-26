@@ -177,6 +177,13 @@
               试听音量
               <input id="analysisPreviewVolume" type="range" min="0" max="2" step="0.01" value="1" />
             </label>
+            <label>
+              分析通道
+              <select id="analysisChannelMode">
+                <option value="sum">和信号 (L+R)</option>
+                <option value="diff">差信号 (L-R)</option>
+              </select>
+            </label>
             <label class="analysis-action-menu">
               操作
               <select id="analysisActionMenu">
@@ -230,7 +237,7 @@
               <button id="analysisDownbeatCalibrate" type="button" class="ghost track-toggle" title="重拍标定">标</button>
               <label>
                 BPM
-                <input id="analysisMetronomeBpm" type="number" min="20" max="400" step="1" value="120" />
+                <input id="analysisMetronomeBpm" type="number" min="20" max="400" step="0.01" value="120" />
               </label>
               <label>
                 拍号

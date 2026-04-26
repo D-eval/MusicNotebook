@@ -454,7 +454,7 @@ function loadAnalysisNotesForTarget() {
     state.analysisTracks = [];
   }
   const metro = stored?.analysisMetronome || state.pendingAnalysisMetronome || null;
-  state.analysisMetronomeBpm = Math.max(1, Math.round(Number(metro?.bpm ?? state.analysisMetronomeBpm ?? 120) || 120));
+  state.analysisMetronomeBpm = normalizeMetronomeBpm(metro?.bpm ?? state.analysisMetronomeBpm ?? 120, 120);
   state.analysisMetronomeSignature = normalizeMetronomeSignature(metro?.signature ?? state.analysisMetronomeSignature ?? '4/4');
   state.analysisMetronomeOffset = Number(metro?.offset ?? state.analysisMetronomeOffset ?? 0) || 0;
   state.analysisGridDivision = normalizeAnalysisGridDivision(metro?.gridDivision ?? state.analysisGridDivision ?? '16');
@@ -474,7 +474,7 @@ function persistAnalysisNotesToTarget() {
   const baseStart = state.analysisRange.start || 0;
   const relTracks = state.analysisTracks.map((t) => serializeTrackToRel(t, baseStart));
   const metronome = {
-    bpm: Math.max(1, Math.round(Number(state.analysisMetronomeBpm ?? 120) || 120)),
+    bpm: normalizeMetronomeBpm(state.analysisMetronomeBpm ?? 120, 120),
     signature: normalizeMetronomeSignature(state.analysisMetronomeSignature ?? '4/4'),
     offset: Number(state.analysisMetronomeOffset ?? 0) || 0,
     gridDivision: normalizeAnalysisGridDivision(state.analysisGridDivision ?? '16'),
@@ -605,6 +605,17 @@ function normalizeMetronomeSignature(signature) {
   return '4/4';
 }
 
+function normalizeMetronomeBpm(value, fallback = 120) {
+  const raw = Number(value);
+  const base = Number.isFinite(raw) ? raw : Number(fallback);
+  const clamped = clamp(base, 1, 400);
+  return Math.round(clamped * 100) / 100;
+}
+
+function normalizeAnalysisChannelMode(mode) {
+  return mode === 'diff' ? 'diff' : 'sum';
+}
+
 function normalizeAnalysisGridDivision(value) {
   const v = String(value || '').trim();
   if (v === '8' || v === '16' || v === '32' || v === 'triplet' || v === 'sextuplet') return v;
@@ -648,7 +659,7 @@ function applyMeterFromDownbeats() {
   const beatsPerBar = Math.max(1, meter.beatsPerBar || 4);
   const barSec = Math.max(0.01, state.analysisDownbeatSecond - state.analysisDownbeatFirst);
   const bpmRaw = (60 * beatsPerBar * (4 / denominator)) / barSec;
-  const bpm = clamp(Math.round(bpmRaw), 1, 400);
+  const bpm = normalizeMetronomeBpm(bpmRaw, 120);
   state.analysisMetronomeBpm = bpm;
   state.analysisMetronomeOffset = state.analysisDownbeatFirst;
   if (ui.analysisMetronomeBpm) ui.analysisMetronomeBpm.value = String(bpm);
@@ -678,7 +689,7 @@ function getMetronomeMeter() {
   const [numRaw, denRaw] = signature.split('/');
   const beatsPerBar = Math.max(1, parseInt(numRaw, 10) || 4);
   const denominator = Math.max(1, parseInt(denRaw, 10) || 4);
-  const bpm = Math.max(1, Math.round(Number(state.analysisMetronomeBpm) || 120));
+  const bpm = normalizeMetronomeBpm(state.analysisMetronomeBpm, 120);
   const beatSec = (60 / bpm) * (4 / denominator);
   return { signature, beatsPerBar, denominator, bpm, beatSec };
 }
@@ -2065,6 +2076,25 @@ function autocorr(frame, lag) {
   return sum;
 }
 
+function buildAnalysisSignal(decoded, startFrame, len, mode = 'sum') {
+  const out = new Float32Array(len);
+  if (!decoded || decoded.numberOfChannels <= 0 || len <= 0) return out;
+  const selectedMode = normalizeAnalysisChannelMode(mode);
+  const left = decoded.getChannelData(0);
+  if (decoded.numberOfChannels < 2) {
+    for (let i = 0; i < len; i += 1) out[i] = left[startFrame + i] || 0;
+    return out;
+  }
+  const right = decoded.getChannelData(1);
+  const sign = selectedMode === 'diff' ? -1 : 1;
+  for (let i = 0; i < len; i += 1) {
+    const l = left[startFrame + i] || 0;
+    const r = right[startFrame + i] || 0;
+    out[i] = (l + sign * r) * 0.5;
+  }
+  return out;
+}
+
 async function analyzeSpectrogram() {
   if (state.analysisRunning) return;
   if (!state.audioBlob || !ui.analysisSpec || !ui.analysisPiano) return;
@@ -2081,18 +2111,10 @@ async function analyzeSpectrogram() {
   state.analysisViewY = { min: MIDI_MIN, max: MIDI_MAX };
   const decoded = await decodeAudioBuffer(safeBlob);
   const sr = decoded.sampleRate;
-  const ch = decoded.numberOfChannels;
   const startFrame = Math.max(0, Math.floor(range.start * sr));
   const endFrame = Math.min(decoded.length, Math.floor(range.end * sr));
   const len = Math.max(1, endFrame - startFrame);
-  const mono = new Float32Array(len);
-  for (let c = 0; c < ch; c += 1) {
-    const data = decoded.getChannelData(c);
-    for (let i = 0; i < len; i += 1) {
-      mono[i] += data[startFrame + i] || 0;
-    }
-  }
-  for (let i = 0; i < len; i += 1) mono[i] /= ch;
+  const mono = buildAnalysisSignal(decoded, startFrame, len, state.analysisChannelMode || 'sum');
 
   state.analysisWaveData = { samples: mono, sampleRate: sr, offset: range.start };
 
@@ -2199,15 +2221,7 @@ async function estimateShiftAndExportWav() {
     const startFrame = Math.max(0, Math.floor(start * sr));
     const endFrame = Math.min(decoded.length, Math.floor(end * sr));
     const len = Math.max(1, endFrame - startFrame);
-    const mono = new Float32Array(len);
-    const ch = decoded.numberOfChannels;
-    for (let c = 0; c < ch; c += 1) {
-      const data = decoded.getChannelData(c);
-      for (let i = 0; i < len; i += 1) {
-        mono[i] += data[startFrame + i] || 0;
-      }
-    }
-    for (let i = 0; i < len; i += 1) mono[i] /= ch;
+    const mono = buildAnalysisSignal(decoded, startFrame, len, state.analysisChannelMode || 'sum');
 
     setStatus('正在估计移调...');
     const { bestShift } = estimateShiftCents(mono, sr, [-50, 50], 1);
@@ -2281,6 +2295,7 @@ ui.goAnalysis.addEventListener('click', () => {
   if (ui.analysisAudioVolume) ui.analysisAudioVolume.value = String(state.analysisAudioVolume ?? 0.8);
   if (ui.analysisNotesVolume) ui.analysisNotesVolume.value = String(state.analysisNotesVolume ?? 0.7);
   if (ui.analysisPreviewVolume) ui.analysisPreviewVolume.value = String(state.analysisPreviewVolume ?? 1);
+  if (ui.analysisChannelMode) ui.analysisChannelMode.value = normalizeAnalysisChannelMode(state.analysisChannelMode ?? 'sum');
   if (ui.analysisMetronomeBpm) ui.analysisMetronomeBpm.value = String(state.analysisMetronomeBpm ?? 120);
   if (ui.analysisMetronomeSignature) ui.analysisMetronomeSignature.value = normalizeMetronomeSignature(state.analysisMetronomeSignature ?? '4/4');
   if (ui.analysisMetronomeOffset) ui.analysisMetronomeOffset.value = String(state.analysisMetronomeOffset ?? 0);
@@ -2379,10 +2394,18 @@ if (ui.analysisPreviewVolume) {
     state.analysisPreviewVolume = parseFloat(ui.analysisPreviewVolume.value || '1');
   });
 }
+if (ui.analysisChannelMode) {
+  ui.analysisChannelMode.value = normalizeAnalysisChannelMode(state.analysisChannelMode ?? 'sum');
+  ui.analysisChannelMode.addEventListener('change', () => {
+    state.analysisChannelMode = normalizeAnalysisChannelMode(ui.analysisChannelMode.value);
+    ui.analysisChannelMode.value = state.analysisChannelMode;
+    analyzeSpectrogram();
+  });
+}
 if (ui.analysisMetronomeBpm) {
   ui.analysisMetronomeBpm.value = String(state.analysisMetronomeBpm ?? 120);
   ui.analysisMetronomeBpm.addEventListener('input', () => {
-    state.analysisMetronomeBpm = Math.max(1, Math.round(Number(ui.analysisMetronomeBpm.value) || 120));
+    state.analysisMetronomeBpm = normalizeMetronomeBpm(ui.analysisMetronomeBpm.value, 120);
     ui.analysisMetronomeBpm.value = String(state.analysisMetronomeBpm);
     syncDownbeatsFromMeter();
     drawAnalysisNotes();

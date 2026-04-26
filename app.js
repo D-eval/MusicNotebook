@@ -116,6 +116,7 @@ const ui = {
   analysisAudioVolume: document.getElementById('analysisAudioVolume'),
   analysisNotesVolume: document.getElementById('analysisNotesVolume'),
   analysisPreviewVolume: document.getElementById('analysisPreviewVolume'),
+  analysisChannelMode: document.getElementById('analysisChannelMode'),
   analysisMetronomeMute: document.getElementById('analysisMetronomeMute'),
   analysisMetronomeSolo: document.getElementById('analysisMetronomeSolo'),
   analysisDownbeatCalibrate: document.getElementById('analysisDownbeatCalibrate'),
@@ -213,6 +214,7 @@ const state = {
   analysisAudioVolume: 0.8,
   analysisNotesVolume: 0.7,
   analysisPreviewVolume: 1.0,
+  analysisChannelMode: 'sum',
   analysisMetronomeBpm: 120,
   analysisMetronomeSignature: '4/4',
   analysisMetronomeOffset: 0,
@@ -460,7 +462,7 @@ function normalizeNote(note) {
     ? note.analysisMetronome
     : null;
   const analysisMetronome = {
-    bpm: Math.max(1, Math.round(Number(analysisMetronomeRaw?.bpm ?? 120) || 120)),
+    bpm: Math.round(Math.max(1, Math.min(400, Number(analysisMetronomeRaw?.bpm ?? 120) || 120)) * 100) / 100,
     signature: typeof analysisMetronomeRaw?.signature === 'string' ? analysisMetronomeRaw.signature : '4/4',
     offset: Number(analysisMetronomeRaw?.offset ?? 0) || 0,
     gridDivision: typeof analysisMetronomeRaw?.gridDivision === 'string' ? analysisMetronomeRaw.gridDivision : '16',
@@ -2079,7 +2081,7 @@ function makeNotesJson(audioNameOverride = null) {
           }))
         : [],
       analysisMetronome: {
-        bpm: Math.max(1, Math.round(Number(n?.analysisMetronome?.bpm ?? 120) || 120)),
+        bpm: Math.round(Math.max(1, Math.min(400, Number(n?.analysisMetronome?.bpm ?? 120) || 120)) * 100) / 100,
         signature: typeof n?.analysisMetronome?.signature === 'string' ? n.analysisMetronome.signature : '4/4',
         offset: Number(n?.analysisMetronome?.offset ?? 0) || 0,
         gridDivision: typeof n?.analysisMetronome?.gridDivision === 'string' ? n.analysisMetronome.gridDivision : '16',
@@ -2335,6 +2337,8 @@ function renderNotes() {
     });
     btnDelete.addEventListener('click', (evt) => {
       evt.stopPropagation();
+      const ok = window.confirm(`确认删除片段 #${idx + 1} 吗？`);
+      if (!ok) return;
       state.notes.splice(idx, 1);
       renderNotes();
     });
@@ -2912,7 +2916,7 @@ function openEditorForNoteIndex(index) {
       }))
     : [];
   state.pendingAnalysisMetronome = {
-    bpm: Math.max(1, Math.round(Number(note?.analysisMetronome?.bpm ?? 120) || 120)),
+    bpm: Math.round(Math.max(1, Math.min(400, Number(note?.analysisMetronome?.bpm ?? 120) || 120)) * 100) / 100,
     signature: typeof note?.analysisMetronome?.signature === 'string' ? note.analysisMetronome.signature : '4/4',
     offset: Number(note?.analysisMetronome?.offset ?? 0) || 0,
     gridDivision: typeof note?.analysisMetronome?.gridDivision === 'string' ? note.analysisMetronome.gridDivision : '16',
@@ -2963,7 +2967,7 @@ function saveNoteEntry(nextPage = 'notes') {
         }))
       : [],
     analysisMetronome: {
-      bpm: Math.max(1, Math.round(Number(state.pendingAnalysisMetronome?.bpm ?? 120) || 120)),
+      bpm: Math.round(Math.max(1, Math.min(400, Number(state.pendingAnalysisMetronome?.bpm ?? 120) || 120)) * 100) / 100,
       signature: typeof state.pendingAnalysisMetronome?.signature === 'string' ? state.pendingAnalysisMetronome.signature : '4/4',
       offset: Number(state.pendingAnalysisMetronome?.offset ?? 0) || 0,
       gridDivision: typeof state.pendingAnalysisMetronome?.gridDivision === 'string' ? state.pendingAnalysisMetronome.gridDivision : '16',
@@ -3211,8 +3215,11 @@ ui.menuEditNote.addEventListener('click', () => {
 });
 ui.menuDeleteNote.addEventListener('click', () => {
   if (state.menuNoteIndex !== null) {
-    state.notes.splice(state.menuNoteIndex, 1);
-    renderNotes();
+    const ok = window.confirm(`确认删除片段 #${state.menuNoteIndex + 1} 吗？`);
+    if (ok) {
+      state.notes.splice(state.menuNoteIndex, 1);
+      renderNotes();
+    }
   }
   hideContextMenu();
 });
