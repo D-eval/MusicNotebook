@@ -195,6 +195,7 @@
               </select>
               <button id="analysisActionRun" type="button" class="ghost plain">执行</button>
             </label>
+            <button id="analysisCqtCurveConfig" type="button" class="ghost plain">CQT窗口曲线</button>
             <label class="analysis-toggle">
               <input id="analysisRootThresholdToggle" type="checkbox" checked />
               显示root阈值
@@ -322,6 +323,17 @@
         <button id="tocMenuOpen" type="button">进入</button>
         <button id="tocMenuRename" type="button">重命名</button>
         <button id="tocMenuDelete" type="button">删除</button>
+      </div>
+      <div id="analysisCqtCurveModal" class="modal-backdrop">
+        <div class="modal-card cqt-curve-card">
+          <h3>CQT窗口曲线（log-log）</h3>
+          <p class="hint">横轴：log频率(Hz)；纵轴：log窗口长度(s)。点击图中任意位置可添加插值点。</p>
+          <canvas id="analysisCqtCurveCanvas" width="640" height="320"></canvas>
+          <div class="row wrap gap" style="margin-top: 10px">
+            <button id="analysisCqtCurveReset" type="button" class="ghost">重置为默认曲线</button>
+            <button id="analysisCqtCurveClose" type="button">关闭</button>
+          </div>
+        </div>
       </div>
       <div id="guideOverlay" class="guide-overlay">
         <div id="guideSpotlight" class="guide-spotlight"></div>

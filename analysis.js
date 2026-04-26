@@ -96,6 +96,8 @@ function clamp(v, min, max) {
 const ROOT_THRESHOLD_SEC = 0.05;
 const BEAT_THRESHOLD_SEC = 0.05;
 const CREATE_DRAG_DEADZONE_PX = 6;
+const CQT_WINDOW_SEC_MIN = 0.01;
+const CQT_WINDOW_SEC_MAX = 1.5;
 const TRACK_NAME_PRESETS = ['<root>', '<chord>', '<tonic>', '<beat>',
   "<atomsphere>", "<use_beat>", "<rootless>",
   "<growlbass>"
@@ -125,7 +127,7 @@ function buildWindow(windowLen, type) {
   return window;
 }
 
-function buildCqtBases(freqs, windowLen, sampleRate, scale) {
+function buildCqtBases(freqs, windowLen, sampleRate, scale, windowSecByFreq = null) {
   const half = Math.floor(windowLen / 2);
   const t = new Float32Array(windowLen);
   for (let i = 0; i < windowLen; i += 1) {
@@ -135,7 +137,10 @@ function buildCqtBases(freqs, windowLen, sampleRate, scale) {
   const cosBasis = [];
   for (let b = 0; b < freqs.length; b += 1) {
     const freq = freqs[b].freq;
-    const sigma = scale / (freq + 1e-6);
+    const customSec = Array.isArray(windowSecByFreq) ? Number(windowSecByFreq[b]) : NaN;
+    const sigma = Number.isFinite(customSec) && customSec > 0
+      ? Math.max(1 / sampleRate, customSec / 6)
+      : scale / (freq + 1e-6);
     const mask = new Float32Array(windowLen);
     let sum = 0;
     for (let i = 0; i < windowLen; i += 1) {
@@ -163,9 +168,61 @@ function shiftFreqsByCents(freqs, cents) {
   return freqs.map((item) => ({ freq: item.freq * factor }));
 }
 
+function getCqtFreqBounds() {
+  const freqs = buildMidiFreqs();
+  return { min: freqs[0].freq, max: freqs[freqs.length - 1].freq };
+}
+
+function createDefaultCqtCurvePoints() {
+  const bounds = getCqtFreqBounds();
+  return [
+    { freq: bounds.min, windowSec: ANALYSIS_CQT_WINDOW_SEC },
+    { freq: bounds.max, windowSec: ANALYSIS_CQT_WINDOW_SEC }
+  ];
+}
+
+function ensureCqtCurvePoints() {
+  if (!Array.isArray(state.analysisCqtCurvePoints) || state.analysisCqtCurvePoints.length < 2) {
+    state.analysisCqtCurvePoints = createDefaultCqtCurvePoints();
+  }
+  const bounds = getCqtFreqBounds();
+  const points = state.analysisCqtCurvePoints
+    .map((p) => ({
+      freq: clamp(Number(p?.freq) || bounds.min, bounds.min, bounds.max),
+      windowSec: clamp(Number(p?.windowSec) || ANALYSIS_CQT_WINDOW_SEC, CQT_WINDOW_SEC_MIN, CQT_WINDOW_SEC_MAX)
+    }))
+    .sort((a, b) => a.freq - b.freq);
+  points[0].freq = bounds.min;
+  points[points.length - 1].freq = bounds.max;
+  state.analysisCqtCurvePoints = points;
+}
+
+function getCqtWindowSecForFreq(freq, fallbackSec = ANALYSIS_CQT_WINDOW_SEC) {
+  ensureCqtCurvePoints();
+  const points = state.analysisCqtCurvePoints;
+  if (!points.length) return clamp(fallbackSec, CQT_WINDOW_SEC_MIN, CQT_WINDOW_SEC_MAX);
+  const f = clamp(Number(freq) || points[0].freq, points[0].freq, points[points.length - 1].freq);
+  const x = Math.log(Math.max(1e-6, f));
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const p0 = points[i];
+    const p1 = points[i + 1];
+    if (f < p0.freq || f > p1.freq) continue;
+    const x0 = Math.log(Math.max(1e-6, p0.freq));
+    const x1 = Math.log(Math.max(1e-6, p1.freq));
+    const y0 = Math.log(Math.max(1e-6, p0.windowSec));
+    const y1 = Math.log(Math.max(1e-6, p1.windowSec));
+    const t = Math.abs(x1 - x0) < 1e-9 ? 0 : (x - x0) / (x1 - x0);
+    const y = y0 + (y1 - y0) * clamp(t, 0, 1);
+    return clamp(Math.exp(y), CQT_WINDOW_SEC_MIN, CQT_WINDOW_SEC_MAX);
+  }
+  return clamp(points[points.length - 1].windowSec, CQT_WINDOW_SEC_MIN, CQT_WINDOW_SEC_MAX);
+}
+
 function estimateShiftCents(mono, sampleRate, shiftRange = [-50, 50], step = 1) {
   const freqs = buildMidiFreqs();
-  let windowLen = Math.max(2, Math.floor(sampleRate * ANALYSIS_CQT_WINDOW_SEC));
+  const baseWindowSecByFreq = freqs.map((item) => getCqtWindowSecForFreq(item.freq, ANALYSIS_CQT_WINDOW_SEC));
+  const maxWindowSec = Math.max(ANALYSIS_CQT_WINDOW_SEC, ...baseWindowSecByFreq);
+  let windowLen = Math.max(2, Math.floor(sampleRate * maxWindowSec));
   if (windowLen % 2 !== 0) windowLen += 1;
   const stride = Math.max(1, Math.floor(windowLen * ANALYSIS_CQT_STRIDE_RATIO));
   const window = buildWindow(windowLen, ANALYSIS_CQT_WINDOW_TYPE);
@@ -179,7 +236,14 @@ function estimateShiftCents(mono, sampleRate, shiftRange = [-50, 50], step = 1) 
 
   for (let shift = shiftRange[0]; shift <= shiftRange[1]; shift += step) {
     const shifted = shiftFreqsByCents(freqs, shift);
-    const { sinBasis, cosBasis } = buildCqtBases(shifted, windowLen, sampleRate, ANALYSIS_CQT_SCALE);
+    const shiftedWindowSecByFreq = shifted.map((item) => getCqtWindowSecForFreq(item.freq, ANALYSIS_CQT_WINDOW_SEC));
+    const { sinBasis, cosBasis } = buildCqtBases(
+      shifted,
+      windowLen,
+      sampleRate,
+      ANALYSIS_CQT_SCALE,
+      shiftedWindowSecByFreq
+    );
     const energy = new Float32Array(bins);
     for (let f = 0; f < frames; f += 1) {
       const offset = f * stride;
@@ -2095,14 +2159,240 @@ function buildAnalysisSignal(decoded, startFrame, len, mode = 'sum') {
   return out;
 }
 
+function cqtCurveAxes() {
+  const bounds = getCqtFreqBounds();
+  const minX = Math.log(bounds.min);
+  const maxX = Math.log(bounds.max);
+  const minY = Math.log(CQT_WINDOW_SEC_MIN);
+  const maxY = Math.log(CQT_WINDOW_SEC_MAX);
+  return { bounds, minX, maxX, minY, maxY };
+}
+
+function getCqtCurveCanvasMap() {
+  const canvas = ui.analysisCqtCurveCanvas;
+  if (!canvas || !canvas._cqtCurveMap) return null;
+  return canvas._cqtCurveMap;
+}
+
+function cqtCurvePointAt(index) {
+  ensureCqtCurvePoints();
+  return state.analysisCqtCurvePoints[index] || null;
+}
+
+function drawCqtCurveEditor() {
+  const canvas = ui.analysisCqtCurveCanvas;
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const width = canvas.clientWidth || canvas.width || 640;
+  const height = canvas.clientHeight || canvas.height || 320;
+  canvas.width = width;
+  canvas.height = height;
+  ensureCqtCurvePoints();
+
+  const pad = { left: 54, right: 16, top: 18, bottom: 34 };
+  const innerW = Math.max(1, width - pad.left - pad.right);
+  const innerH = Math.max(1, height - pad.top - pad.bottom);
+  const { minX, maxX, minY, maxY, bounds } = cqtCurveAxes();
+  const toX = (freq) => pad.left + ((Math.log(Math.max(1e-6, freq)) - minX) / (maxX - minX)) * innerW;
+  const toY = (windowSec) => pad.top + (1 - (Math.log(Math.max(1e-6, windowSec)) - minY) / (maxY - minY)) * innerH;
+  const xToFreq = (x) => Math.exp(minX + ((x - pad.left) / innerW) * (maxX - minX));
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillRect(0, 0, width, height);
+
+  // Grid ticks on both axes.
+  const freqTicks = [16.35, 27.5, 55, 110, 220, 440, 880, 1760, 3520, 7040, 12543];
+  const winTicks = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 1.5];
+  ctx.strokeStyle = 'rgba(100,116,139,0.18)';
+  ctx.lineWidth = 1;
+  freqTicks.forEach((f) => {
+    if (f < bounds.min || f > bounds.max) return;
+    const x = toX(f);
+    ctx.beginPath();
+    ctx.moveTo(x, pad.top);
+    ctx.lineTo(x, pad.top + innerH);
+    ctx.stroke();
+  });
+  winTicks.forEach((w) => {
+    if (w < CQT_WINDOW_SEC_MIN || w > CQT_WINDOW_SEC_MAX) return;
+    const y = toY(w);
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(pad.left + innerW, y);
+    ctx.stroke();
+  });
+
+  ctx.strokeStyle = 'rgba(15,23,42,0.16)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(pad.left, pad.top, innerW, innerH);
+
+  // Curve
+  ctx.strokeStyle = 'rgba(37,99,235,0.95)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i <= innerW; i += 1) {
+    const x = pad.left + i;
+    const freq = xToFreq(x);
+    const wSec = getCqtWindowSecForFreq(freq, ANALYSIS_CQT_WINDOW_SEC);
+    const y = toY(wSec);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // Points
+  state.analysisCqtCurvePoints.forEach((p, idx) => {
+    const x = toX(p.freq);
+    const y = toY(p.windowSec);
+    ctx.fillStyle = idx === 0 || idx === state.analysisCqtCurvePoints.length - 1 ? '#f59e0b' : '#2563eb';
+    ctx.beginPath();
+    ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  ctx.fillStyle = 'rgba(30,41,59,0.9)';
+  ctx.font = '12px ui-monospace, SFMono-Regular, Menlo, monospace';
+  ctx.fillText(`${bounds.min.toFixed(1)}Hz`, pad.left, height - 10);
+  const maxLabel = `${bounds.max.toFixed(1)}Hz`;
+  ctx.fillText(maxLabel, width - pad.right - ctx.measureText(maxLabel).width, height - 10);
+  winTicks.forEach((w) => {
+    if (w < CQT_WINDOW_SEC_MIN || w > CQT_WINDOW_SEC_MAX) return;
+    const y = toY(w);
+    ctx.fillText(`${w.toFixed(2)}s`, 8, y + 4);
+  });
+  freqTicks.forEach((f) => {
+    if (f < bounds.min || f > bounds.max) return;
+    const x = toX(f);
+    const label = f >= 1000 ? `${(f / 1000).toFixed(1)}k` : `${Math.round(f)}`;
+    const tw = ctx.measureText(label).width;
+    ctx.fillText(label, x - tw / 2, height - 10);
+  });
+
+  canvas._cqtCurveMap = { pad, innerW, innerH, minX, maxX, minY, maxY, toX, toY, xToFreq };
+}
+
+function addCqtCurvePointFromCanvas(clientX, clientY) {
+  const canvas = ui.analysisCqtCurveCanvas;
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  const map = canvas._cqtCurveMap;
+  if (!map) return;
+  const x = clamp(clientX - rect.left, map.pad.left, map.pad.left + map.innerW);
+  const y = clamp(clientY - rect.top, map.pad.top, map.pad.top + map.innerH);
+  const freq = Math.exp(map.minX + ((x - map.pad.left) / map.innerW) * (map.maxX - map.minX));
+  const windowSec = Math.exp(map.minY + (1 - (y - map.pad.top) / map.innerH) * (map.maxY - map.minY));
+  ensureCqtCurvePoints();
+  const endpoints = [
+    { ...state.analysisCqtCurvePoints[0] },
+    { ...state.analysisCqtCurvePoints[state.analysisCqtCurvePoints.length - 1] }
+  ];
+  const points = state.analysisCqtCurvePoints.slice(1, -1);
+  points.push({
+    freq: clamp(freq, getCqtFreqBounds().min, getCqtFreqBounds().max),
+    windowSec: clamp(windowSec, CQT_WINDOW_SEC_MIN, CQT_WINDOW_SEC_MAX)
+  });
+  state.analysisCqtCurvePoints = [endpoints[0], ...points, endpoints[1]].sort((a, b) => a.freq - b.freq);
+  ensureCqtCurvePoints();
+  drawCqtCurveEditor();
+  analyzeSpectrogram();
+}
+
+function hitTestCqtCurvePoint(clientX, clientY, radius = 8) {
+  const canvas = ui.analysisCqtCurveCanvas;
+  const map = getCqtCurveCanvasMap();
+  if (!canvas || !map) return null;
+  const rect = canvas.getBoundingClientRect();
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  ensureCqtCurvePoints();
+  let best = null;
+  state.analysisCqtCurvePoints.forEach((p, idx) => {
+    const px = map.toX(p.freq);
+    const py = map.toY(p.windowSec);
+    const d = Math.hypot(px - x, py - y);
+    if (d <= radius && (!best || d < best.d)) best = { idx, d };
+  });
+  return best ? best.idx : null;
+}
+
+function beginCqtCurvePointDrag(pointIndex, clientX, clientY) {
+  const map = getCqtCurveCanvasMap();
+  if (!map) return;
+  const isEndpoint = pointIndex === 0 || pointIndex === state.analysisCqtCurvePoints.length - 1;
+  state.analysisCqtCurveDrag = {
+    pointIndex,
+    lockX: isEndpoint,
+    lastClientX: clientX,
+    lastClientY: clientY
+  };
+}
+
+function updateCqtCurvePointDrag(clientX, clientY) {
+  const drag = state.analysisCqtCurveDrag;
+  const canvas = ui.analysisCqtCurveCanvas;
+  const map = getCqtCurveCanvasMap();
+  if (!drag || !canvas || !map) return;
+  const point = cqtCurvePointAt(drag.pointIndex);
+  if (!point) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = clamp(clientX - rect.left, map.pad.left, map.pad.left + map.innerW);
+  const y = clamp(clientY - rect.top, map.pad.top, map.pad.top + map.innerH);
+  const nextWindow = Math.exp(map.minY + (1 - (y - map.pad.top) / map.innerH) * (map.maxY - map.minY));
+  point.windowSec = clamp(nextWindow, CQT_WINDOW_SEC_MIN, CQT_WINDOW_SEC_MAX);
+  if (!drag.lockX) {
+    const nextFreq = map.xToFreq(x);
+    const bounds = getCqtFreqBounds();
+    point.freq = clamp(nextFreq, bounds.min, bounds.max);
+  }
+  ensureCqtCurvePoints();
+  drawCqtCurveEditor();
+}
+
+function endCqtCurvePointDrag() {
+  if (!state.analysisCqtCurveDrag) return;
+  state.analysisCqtCurveDrag = null;
+  analyzeSpectrogram();
+}
+
+function deleteCqtCurvePoint(pointIndex) {
+  ensureCqtCurvePoints();
+  if (pointIndex <= 0 || pointIndex >= state.analysisCqtCurvePoints.length - 1) return false;
+  state.analysisCqtCurvePoints.splice(pointIndex, 1);
+  ensureCqtCurvePoints();
+  drawCqtCurveEditor();
+  analyzeSpectrogram();
+  return true;
+}
+
+function openCqtCurveEditor() {
+  ensureCqtCurvePoints();
+  if (ui.analysisCqtCurveModal) ui.analysisCqtCurveModal.classList.add('open');
+  drawCqtCurveEditor();
+}
+
+function closeCqtCurveEditor() {
+  state.analysisCqtCurveDrag = null;
+  if (ui.analysisCqtCurveModal) ui.analysisCqtCurveModal.classList.remove('open');
+}
+
 async function analyzeSpectrogram() {
-  if (state.analysisRunning) return;
+  if (state.analysisRunning) {
+    state.analysisReanalyzePending = true;
+    return;
+  }
   if (!state.audioBlob || !ui.analysisSpec || !ui.analysisPiano) return;
   state.analysisRunning = true;
+  state.analysisReanalyzePending = false;
   const safeBlob = await getSafeAudioBlob();
   if (!safeBlob) {
     state.analysisRunning = false;
     setStatus('音频读取失败，无法分析频谱');
+    if (state.analysisReanalyzePending) {
+      state.analysisReanalyzePending = false;
+      analyzeSpectrogram();
+    }
     return;
   }
   const range = getAnalysisRange();
@@ -2118,13 +2408,15 @@ async function analyzeSpectrogram() {
 
   state.analysisWaveData = { samples: mono, sampleRate: sr, offset: range.start };
 
-  let windowLen = Math.max(2, Math.floor(sr * ANALYSIS_CQT_WINDOW_SEC));
+  const freqs = buildMidiFreqs();
+  const windowSecByFreq = freqs.map((item) => getCqtWindowSecForFreq(item.freq, ANALYSIS_CQT_WINDOW_SEC));
+  const maxWindowSec = Math.max(ANALYSIS_CQT_WINDOW_SEC, ...windowSecByFreq);
+  let windowLen = Math.max(2, Math.floor(sr * maxWindowSec));
   if (windowLen % 2 !== 0) windowLen += 1;
   const stride = Math.max(1, Math.floor(windowLen * ANALYSIS_CQT_STRIDE_RATIO));
   const window = buildWindow(windowLen, ANALYSIS_CQT_WINDOW_TYPE);
-  const freqs = buildMidiFreqs();
   const bins = freqs.length;
-  const { sinBasis, cosBasis } = buildCqtBases(freqs, windowLen, sr, ANALYSIS_CQT_SCALE);
+  const { sinBasis, cosBasis } = buildCqtBases(freqs, windowLen, sr, ANALYSIS_CQT_SCALE, windowSecByFreq);
   const frames = Math.max(1, Math.floor((mono.length - windowLen) / stride) + 1);
   const matrix = Array.from({ length: frames }, () => new Float32Array(bins));
   const winFrame = new Float32Array(windowLen);
@@ -2172,6 +2464,10 @@ async function analyzeSpectrogram() {
   drawAnalysisNotes();
   drawAnalysisWave();
   state.analysisRunning = false;
+  if (state.analysisReanalyzePending) {
+    state.analysisReanalyzePending = false;
+    analyzeSpectrogram();
+  }
 }
 
 async function estimateShiftAndExportWav() {
@@ -2360,10 +2656,13 @@ if (ui.analysisAddTrack) {
     drawAnalysisNotes();
   });
 }
-  window.addEventListener('resize', () => {
-    if (!pages.analysis.classList.contains('active')) return;
-    refreshAnalysisLayout();
-  });
+window.addEventListener('resize', () => {
+  if (ui.analysisCqtCurveModal?.classList.contains('open')) {
+    drawCqtCurveEditor();
+  }
+  if (!pages.analysis.classList.contains('active')) return;
+  refreshAnalysisLayout();
+});
 ui.analysisPlay.addEventListener('click', () => {
   toggleAnalysisPlayback();
 });
@@ -2531,6 +2830,56 @@ async function runAnalysisMenuAction(action) {
 if (ui.analysisActionRun && ui.analysisActionMenu) {
   ui.analysisActionRun.addEventListener('click', () => {
     runAnalysisMenuAction(ui.analysisActionMenu.value);
+  });
+}
+if (ui.analysisCqtCurveConfig) {
+  ui.analysisCqtCurveConfig.addEventListener('click', () => {
+    openCqtCurveEditor();
+  });
+}
+if (ui.analysisCqtCurveClose) {
+  ui.analysisCqtCurveClose.addEventListener('click', () => {
+    closeCqtCurveEditor();
+  });
+}
+if (ui.analysisCqtCurveReset) {
+  ui.analysisCqtCurveReset.addEventListener('click', () => {
+    state.analysisCqtCurvePoints = createDefaultCqtCurvePoints();
+    drawCqtCurveEditor();
+    analyzeSpectrogram();
+  });
+}
+if (ui.analysisCqtCurveModal) {
+  ui.analysisCqtCurveModal.addEventListener('click', (evt) => {
+    if (evt.target === ui.analysisCqtCurveModal) closeCqtCurveEditor();
+  });
+}
+if (ui.analysisCqtCurveCanvas) {
+  ui.analysisCqtCurveCanvas.addEventListener('contextmenu', (evt) => {
+    evt.preventDefault();
+  });
+  ui.analysisCqtCurveCanvas.addEventListener('pointerdown', (evt) => {
+    const hitIdx = hitTestCqtCurvePoint(evt.clientX, evt.clientY);
+    if (evt.button === 2) {
+      if (hitIdx !== null) deleteCqtCurvePoint(hitIdx);
+      return;
+    }
+    if (evt.button !== 0) return;
+    if (hitIdx !== null) {
+      beginCqtCurvePointDrag(hitIdx, evt.clientX, evt.clientY);
+      return;
+    }
+    addCqtCurvePointFromCanvas(evt.clientX, evt.clientY);
+  });
+  ui.analysisCqtCurveCanvas.addEventListener('pointermove', (evt) => {
+    if (!state.analysisCqtCurveDrag) return;
+    updateCqtCurvePointDrag(evt.clientX, evt.clientY);
+  });
+  ui.analysisCqtCurveCanvas.addEventListener('pointerup', () => {
+    endCqtCurvePointDrag();
+  });
+  ui.analysisCqtCurveCanvas.addEventListener('pointerleave', () => {
+    endCqtCurvePointDrag();
   });
 }
 ui.analysisTimebar.addEventListener('pointerdown', (evt) => {
