@@ -314,6 +314,26 @@ function drawAnalysisShiftWindow(ctx, width, height) {
   ctx.restore();
 }
 
+function drawAnalysisBoxSelection(ctx, height) {
+  const box = state.analysisBoxSelect;
+  if (!box) return;
+  const x0 = Math.min(box.startX, box.currentX);
+  const x1 = Math.max(box.startX, box.currentX);
+  const y0 = Math.min(box.startY, box.currentY);
+  const y1 = Math.max(box.startY, box.currentY);
+  const offset = getAnalysisYOffset();
+  const yStart = Math.max(offset, y0);
+  const yEnd = Math.min(height, y1);
+  if (x1 <= x0 || yEnd <= yStart) return;
+  ctx.save();
+  ctx.fillStyle = 'rgba(59, 130, 246, 0.18)';
+  ctx.strokeStyle = 'rgba(59, 130, 246, 0.8)';
+  ctx.lineWidth = 1;
+  ctx.fillRect(x0, yStart, x1 - x0, yEnd - yStart);
+  ctx.strokeRect(x0 + 0.5, yStart + 0.5, Math.max(0, x1 - x0 - 1), Math.max(0, yEnd - yStart - 1));
+  ctx.restore();
+}
+
 function interleaveAudioBuffer(buffer) {
   const channels = buffer.numberOfChannels;
   const length = buffer.length;
@@ -411,11 +431,129 @@ function setActiveAnalysisTrack(trackId) {
   state.analysisActiveTrackId = trackId;
   const track = getActiveAnalysisTrack();
   state.analysisNotes = track ? track.notes : [];
-  state.analysisSelectedId = null;
-  state.analysisSelectedTrackId = null;
-  stopSelectedNotePreview();
+  clearAnalysisSelection();
   renderAnalysisTracks();
   drawAnalysisNotes();
+}
+
+function makeAnalysisSelectionKey(trackId, noteId) {
+  return `${trackId}::${noteId}`;
+}
+
+function parseAnalysisSelectionKey(key) {
+  const sep = key.indexOf('::');
+  if (sep < 0) return null;
+  return {
+    trackId: key.slice(0, sep),
+    noteId: key.slice(sep + 2)
+  };
+}
+
+function ensureAnalysisSelectionSet() {
+  if (!(state.analysisSelectedKeys instanceof Set)) {
+    const base = Array.isArray(state.analysisSelectedKeys) ? state.analysisSelectedKeys : [];
+    state.analysisSelectedKeys = new Set(base.filter((k) => typeof k === 'string' && k.includes('::')));
+  }
+  return state.analysisSelectedKeys;
+}
+
+function clearAnalysisSelection(options = {}) {
+  const { keepPreview = false } = options;
+  state.analysisSelectedId = null;
+  state.analysisSelectedTrackId = null;
+  ensureAnalysisSelectionSet().clear();
+  if (!keepPreview) stopSelectedNotePreview();
+}
+
+function isAnalysisNoteSelected(trackId, noteId) {
+  return ensureAnalysisSelectionSet().has(makeAnalysisSelectionKey(trackId, noteId));
+}
+
+function setPrimaryAnalysisSelection(trackId, noteId, options = {}) {
+  const { replaceSet = false } = options;
+  if (!trackId || !noteId) return;
+  state.analysisSelectedTrackId = trackId;
+  state.analysisSelectedId = noteId;
+  const set = ensureAnalysisSelectionSet();
+  if (replaceSet) set.clear();
+  set.add(makeAnalysisSelectionKey(trackId, noteId));
+}
+
+function selectSingleAnalysisNote(trackId, noteId) {
+  clearAnalysisSelection({ keepPreview: true });
+  setPrimaryAnalysisSelection(trackId, noteId, { replaceSet: true });
+}
+
+function getSelectedAnalysisEntries() {
+  const byTrack = new Map();
+  state.analysisTracks.forEach((track) => byTrack.set(track.id, track));
+  const set = ensureAnalysisSelectionSet();
+  const entries = [];
+  for (const key of set) {
+    const parsed = parseAnalysisSelectionKey(key);
+    if (!parsed) continue;
+    const track = byTrack.get(parsed.trackId);
+    if (!track || !Array.isArray(track.notes)) continue;
+    const note = track.notes.find((n) => n.id === parsed.noteId);
+    if (!note) continue;
+    entries.push({ key, track, note });
+  }
+  return entries;
+}
+
+function normalizeAnalysisSelection() {
+  const entries = getSelectedAnalysisEntries();
+  const set = ensureAnalysisSelectionSet();
+  const valid = new Set(entries.map((item) => item.key));
+  for (const key of Array.from(set)) {
+    if (!valid.has(key)) set.delete(key);
+  }
+  const primaryOk =
+    state.analysisSelectedTrackId &&
+    state.analysisSelectedId &&
+    set.has(makeAnalysisSelectionKey(state.analysisSelectedTrackId, state.analysisSelectedId));
+  if (!primaryOk) {
+    const first = entries[0] || null;
+    state.analysisSelectedTrackId = first ? first.track.id : null;
+    state.analysisSelectedId = first ? first.note.id : null;
+  }
+}
+
+function selectAllAnalysisNotes() {
+  clearAnalysisSelection({ keepPreview: true });
+  const set = ensureAnalysisSelectionSet();
+  state.analysisTracks.forEach((track) => {
+    if (!Array.isArray(track.notes)) return;
+    track.notes.forEach((note) => {
+      set.add(makeAnalysisSelectionKey(track.id, note.id));
+    });
+  });
+  const first = getSelectedAnalysisEntries()[0] || null;
+  state.analysisSelectedTrackId = first ? first.track.id : null;
+  state.analysisSelectedId = first ? first.note.id : null;
+}
+
+function collectNotesInSelectionRect(rect, width, height) {
+  const xMin = Math.min(rect.startX, rect.currentX);
+  const xMax = Math.max(rect.startX, rect.currentX);
+  const yMin = Math.min(rect.startY, rect.currentY);
+  const yMax = Math.max(rect.startY, rect.currentY);
+  const offset = getAnalysisYOffset();
+  const gridHeight = Math.max(1, height - offset);
+  const grid = getAnalysisGrid(gridHeight);
+  const binH = grid.binH;
+  const hits = [];
+  getRenderableTracks().forEach((track) => {
+    track.notes.forEach((note) => {
+      const x0 = timeToX(note.start, width);
+      const x1 = timeToX(note.end, width);
+      const y0 = midiToY(note.midi, height);
+      const y1 = y0 + binH;
+      const overlap = x1 >= xMin && x0 <= xMax && y1 >= yMin && y0 <= yMax;
+      if (overlap) hits.push({ track, note });
+    });
+  });
+  return hits;
 }
 
 function ensureAnalysisTracks() {
@@ -521,6 +659,10 @@ function loadAnalysisNotesForTarget() {
   state.analysisMetronomeBpm = normalizeMetronomeBpm(metro?.bpm ?? state.analysisMetronomeBpm ?? 120, 120);
   state.analysisMetronomeSignature = normalizeMetronomeSignature(metro?.signature ?? state.analysisMetronomeSignature ?? '4/4');
   state.analysisMetronomeOffset = Number(metro?.offset ?? state.analysisMetronomeOffset ?? 0) || 0;
+  const audioVolumeRaw = metro?.audioVolume ?? state.analysisAudioVolume ?? 0.8;
+  const metronomeVolumeRaw = metro?.metronomeVolume ?? metro?.volumeRatio ?? state.analysisNotesVolume ?? 0.7;
+  state.analysisAudioVolume = Math.round(Math.max(0, Math.min(1, Number(audioVolumeRaw) || 0.8)) * 100) / 100;
+  state.analysisNotesVolume = Math.round(Math.max(0, Math.min(1, Number(metronomeVolumeRaw) || 0.7)) * 100) / 100;
   state.analysisGridDivision = normalizeAnalysisGridDivision(metro?.gridDivision ?? state.analysisGridDivision ?? '16');
   syncDownbeatsFromMeter();
   state.analysisMetronomeMuted = !!metro?.muted;
@@ -529,6 +671,10 @@ function loadAnalysisNotesForTarget() {
   if (ui.analysisMetronomeSignature) ui.analysisMetronomeSignature.value = state.analysisMetronomeSignature;
   if (ui.analysisMetronomeOffset) ui.analysisMetronomeOffset.value = String(state.analysisMetronomeOffset);
   if (ui.analysisGridDivision) ui.analysisGridDivision.value = state.analysisGridDivision;
+  if (ui.analysisAudioVolume) ui.analysisAudioVolume.value = String(state.analysisAudioVolume);
+  if (ui.analysisNotesVolume) ui.analysisNotesVolume.value = String(state.analysisNotesVolume);
+  applyAnalysisAudioVolume();
+  applyAnalysisSynthVolume();
   updateMetronomeToggleUI();
   ensureAnalysisTracks();
   setActiveAnalysisTrack(state.analysisActiveTrackId);
@@ -537,10 +683,23 @@ function loadAnalysisNotesForTarget() {
 function persistAnalysisNotesToTarget() {
   const baseStart = state.analysisRange.start || 0;
   const relTracks = state.analysisTracks.map((t) => serializeTrackToRel(t, baseStart));
+  const targetNote = state.analysisTargetIndex !== null ? state.notes[state.analysisTargetIndex] : null;
+  const audioVolumeRaw = targetNote?.analysisMetronome?.audioVolume ?? state.pendingAnalysisMetronome?.audioVolume ?? state.analysisAudioVolume ?? 0.8;
+  const metronomeVolumeRaw =
+    targetNote?.analysisMetronome?.metronomeVolume ??
+    targetNote?.analysisMetronome?.volumeRatio ??
+    state.pendingAnalysisMetronome?.metronomeVolume ??
+    state.pendingAnalysisMetronome?.volumeRatio ??
+    state.analysisNotesVolume ??
+    0.7;
+  const audioVolume = Math.round(Math.max(0, Math.min(1, Number(audioVolumeRaw) || 0.8)) * 100) / 100;
+  const metronomeVolume = Math.round(Math.max(0, Math.min(1, Number(metronomeVolumeRaw) || 0.7)) * 100) / 100;
   const metronome = {
     bpm: normalizeMetronomeBpm(state.analysisMetronomeBpm ?? 120, 120),
     signature: normalizeMetronomeSignature(state.analysisMetronomeSignature ?? '4/4'),
     offset: Number(state.analysisMetronomeOffset ?? 0) || 0,
+    audioVolume,
+    metronomeVolume,
     gridDivision: normalizeAnalysisGridDivision(state.analysisGridDivision ?? '16'),
     muted: !!state.analysisMetronomeMuted,
     solo: !!state.analysisMetronomeSolo
@@ -853,6 +1012,7 @@ function drawDownbeatAnchors(ctx, width, height) {
 
 function drawAnalysisNotes() {
   if (!ui.analysisNotes) return;
+  normalizeAnalysisSelection();
   const canvas = ui.analysisNotes;
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
@@ -953,12 +1113,13 @@ function drawAnalysisNotes() {
         else ctx.lineTo(px, py);
       }
       ctx.stroke();
-      if (state.analysisSelectedId === note.id && state.analysisSelectedTrackId === track.id) {
+      if (isAnalysisNoteSelected(track.id, note.id)) {
         ctx.strokeStyle = '#f97316';
         ctx.strokeRect(x0, y0, w, h);
       }
     });
   });
+  drawAnalysisBoxSelection(ctx, height);
   drawDownbeatAnchors(ctx, width, height);
   drawAnalysisShiftWindow(ctx, width, height);
   drawAnalysisPlayhead();
@@ -1482,8 +1643,7 @@ async function importMidiToAnalysis() {
   state.analysisTracks = built.tracks;
   const first = state.analysisTracks[0];
   state.analysisActiveTrackId = first ? first.id : null;
-  state.analysisSelectedId = null;
-  state.analysisSelectedTrackId = null;
+  clearAnalysisSelection({ keepPreview: true });
   state.analysisNotes = first ? first.notes : [];
   if (built.midiMin !== null && built.midiMax !== null) {
     const pad = 3;
@@ -2895,21 +3055,36 @@ ui.analysisTimebar.addEventListener('pointerdown', (evt) => {
 document.addEventListener('keydown', (evt) => {
   if (!pages.analysis.classList.contains('active')) return;
   if (evt.target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(evt.target.tagName)) return;
+  const withModifier = evt.metaKey || evt.ctrlKey;
+  if (withModifier && evt.key && evt.key.toLowerCase() === 'a') {
+    evt.preventDefault();
+    selectAllAnalysisNotes();
+    drawAnalysisNotes();
+    return;
+  }
   if (evt.code === 'Space') {
     evt.preventDefault();
     toggleAnalysisPlayback();
   }
   if (evt.code === 'Backspace' || evt.code === 'Delete') {
-    if (state.analysisSelectedId && state.analysisSelectedTrackId) {
-      const track = state.analysisTracks.find((t) => t.id === state.analysisSelectedTrackId);
-      if (track) {
-        track.notes = track.notes.filter((n) => n.id !== state.analysisSelectedId);
-      }
-      state.analysisSelectedId = null;
-      state.analysisSelectedTrackId = null;
-      stopSelectedNotePreview();
-      drawAnalysisNotes();
+    const selected = getSelectedAnalysisEntries();
+    if (!selected.length && state.analysisSelectedId && state.analysisSelectedTrackId) {
+      selectSingleAnalysisNote(state.analysisSelectedTrackId, state.analysisSelectedId);
     }
+    const all = getSelectedAnalysisEntries();
+    if (!all.length) return;
+    const removeByTrack = new Map();
+    all.forEach((item) => {
+      if (!removeByTrack.has(item.track.id)) removeByTrack.set(item.track.id, new Set());
+      removeByTrack.get(item.track.id).add(item.note.id);
+    });
+    state.analysisTracks.forEach((track) => {
+      const ids = removeByTrack.get(track.id);
+      if (!ids || !ids.size) return;
+      track.notes = track.notes.filter((n) => !ids.has(n.id));
+    });
+    clearAnalysisSelection();
+    drawAnalysisNotes();
   }
 });
 
@@ -2970,6 +3145,18 @@ if (ui.analysisNotes) {
     }
     const tool = getToolForButton(evt.button);
     hideVelocitySlider();
+    const withModifier = evt.metaKey || evt.ctrlKey;
+    if (evt.button === 0 && withModifier) {
+      state.analysisBoxSelect = {
+        startX: x,
+        startY: y,
+        currentX: x,
+        currentY: y
+      };
+      state.analysisDrag = { mode: 'box-select' };
+      drawAnalysisNotes();
+      return;
+    }
     if (tool === "shift-window") {
       const startTime = xToTime(x, width);
       state.analysisShiftWindow = { start: startTime, end: startTime };
@@ -2984,24 +3171,54 @@ if (ui.analysisNotes) {
         if (track) {
           track.notes = track.notes.filter((n) => n.id !== hit.note.id);
         }
-        state.analysisSelectedId = null;
-        state.analysisSelectedTrackId = null;
-        stopSelectedNotePreview();
+        clearAnalysisSelection();
         drawAnalysisNotes();
       }
       return;
     }
     if (tool === "select") {
       if (hit) {
-        setActiveAnalysisTrack(hit.track.id);
-        state.analysisSelectedId = hit.note.id;
-        state.analysisSelectedTrackId = hit.track.id;
+        if (state.analysisActiveTrackId !== hit.track.id) {
+          state.analysisActiveTrackId = hit.track.id;
+          state.analysisNotes = hit.track.notes;
+          renderAnalysisTracks();
+        }
+        const key = makeAnalysisSelectionKey(hit.track.id, hit.note.id);
+        const selectedSet = ensureAnalysisSelectionSet();
+        const hitAlreadySelected = selectedSet.has(key);
+        if (!hitAlreadySelected || selectedSet.size <= 1) {
+          selectSingleAnalysisNote(hit.track.id, hit.note.id);
+        } else {
+          setPrimaryAnalysisSelection(hit.track.id, hit.note.id);
+        }
         state.analysisLastSustain = Math.max(0.02, hit.note.end - hit.note.start);
         startSelectedNotePreview(hit.note.midi, hit.note.velocity, hit.track.type);
         const edge = 6;
         let mode = 'move';
         if (Math.abs(x - hit.x0) <= edge) mode = 'resize-left';
         if (Math.abs(x - hit.x1) <= edge) mode = 'resize-right';
+        if (mode === 'move' && isAnalysisNoteSelected(hit.track.id, hit.note.id)) {
+          const selected = getSelectedAnalysisEntries();
+          if (selected.length > 1) {
+            state.analysisDrag = {
+              mode: 'move-multi',
+              startX: x,
+              startY: y,
+              notes: selected.map((item) => ({
+                trackId: item.track.id,
+                id: item.note.id,
+                start: item.note.start,
+                end: item.note.end,
+                midi: item.note.midi
+              })),
+              previewTrackType: hit.track.type,
+              previewKey: key,
+              lastPreviewMidi: hit.note.midi
+            };
+            drawAnalysisNotes();
+            return;
+          }
+        }
         state.analysisDrag = {
           id: hit.note.id,
           trackId: hit.track.id,
@@ -3015,9 +3232,7 @@ if (ui.analysisNotes) {
         };
         drawAnalysisNotes();
       } else {
-        state.analysisSelectedId = null;
-        state.analysisSelectedTrackId = null;
-        stopSelectedNotePreview();
+        clearAnalysisSelection();
         state.analysisDrag = {
           id: null,
           mode: 'pan',
@@ -3034,15 +3249,47 @@ if (ui.analysisNotes) {
     }
     if (tool === "pencil") {
       if (hit) {
-        setActiveAnalysisTrack(hit.track.id);
-        state.analysisSelectedId = hit.note.id;
-        state.analysisSelectedTrackId = hit.track.id;
+        if (state.analysisActiveTrackId !== hit.track.id) {
+          state.analysisActiveTrackId = hit.track.id;
+          state.analysisNotes = hit.track.notes;
+          renderAnalysisTracks();
+        }
+        const key = makeAnalysisSelectionKey(hit.track.id, hit.note.id);
+        const selectedSet = ensureAnalysisSelectionSet();
+        const hitAlreadySelected = selectedSet.has(key);
+        if (!hitAlreadySelected || selectedSet.size <= 1) {
+          selectSingleAnalysisNote(hit.track.id, hit.note.id);
+        } else {
+          setPrimaryAnalysisSelection(hit.track.id, hit.note.id);
+        }
         state.analysisLastSustain = Math.max(0.02, hit.note.end - hit.note.start);
         startSelectedNotePreview(hit.note.midi, hit.note.velocity, hit.track.type);
         const edge = 6;
         let mode = 'move';
         if (Math.abs(x - hit.x0) <= edge) mode = 'resize-left';
         if (Math.abs(x - hit.x1) <= edge) mode = 'resize-right';
+        if (mode === 'move' && isAnalysisNoteSelected(hit.track.id, hit.note.id)) {
+          const selected = getSelectedAnalysisEntries();
+          if (selected.length > 1) {
+            state.analysisDrag = {
+              mode: 'move-multi',
+              startX: x,
+              startY: y,
+              notes: selected.map((item) => ({
+                trackId: item.track.id,
+                id: item.note.id,
+                start: item.note.start,
+                end: item.note.end,
+                midi: item.note.midi
+              })),
+              previewTrackType: hit.track.type,
+              previewKey: key,
+              lastPreviewMidi: hit.note.midi
+            };
+            drawAnalysisNotes();
+            return;
+          }
+        }
         state.analysisDrag = {
           id: hit.note.id,
           trackId: hit.track.id,
@@ -3068,8 +3315,7 @@ if (ui.analysisNotes) {
           velocity: 0.7
         };
         activeTrack.notes.push(note);
-        state.analysisSelectedId = note.id;
-        state.analysisSelectedTrackId = activeTrack.id;
+        selectSingleAnalysisNote(activeTrack.id, note.id);
         state.analysisLastSustain = Math.max(0.02, note.end - note.start);
         startSelectedNotePreview(note.midi, note.velocity, activeTrack.type);
         document.dispatchEvent(new CustomEvent('guide-action', { detail: { type: 'analysis-note-created' } }));
@@ -3131,6 +3377,38 @@ if (ui.analysisNotes) {
       setAnalysisViewY(drag.viewMin + dmidi, drag.viewMax + dmidi);
       return;
     }
+    if (drag.mode === 'box-select') {
+      if (state.analysisBoxSelect) {
+        state.analysisBoxSelect.currentX = x;
+        state.analysisBoxSelect.currentY = y;
+        drawAnalysisNotes();
+      }
+      return;
+    }
+    if (drag.mode === 'move-multi') {
+      const dt = xToTime(x, width) - xToTime(drag.startX, width);
+      const dmidi = yToMidi(y, height) - yToMidi(drag.startY, height);
+      drag.notes.forEach((item) => {
+        const track = state.analysisTracks.find((t) => t.id === item.trackId);
+        const note = track ? track.notes.find((n) => n.id === item.id) : null;
+        if (!note) return;
+        note.start = item.start + dt;
+        note.end = item.end + dt;
+        note.midi = item.midi + dmidi;
+      });
+      const preview = drag.notes.find((item) => makeAnalysisSelectionKey(item.trackId, item.id) === drag.previewKey);
+      if (preview) {
+        const previewTrack = state.analysisTracks.find((t) => t.id === preview.trackId);
+        const previewNote = previewTrack ? previewTrack.notes.find((n) => n.id === preview.id) : null;
+        if (previewNote && previewNote.midi !== drag.lastPreviewMidi) {
+          updateSelectedNotePreview(previewNote.midi, previewNote.velocity, previewTrack?.type || drag.previewTrackType || 'pitch');
+          drag.lastPreviewMidi = previewNote.midi;
+        }
+      }
+      document.dispatchEvent(new CustomEvent('guide-action', { detail: { type: 'analysis-note-edited' } }));
+      drawAnalysisNotes();
+      return;
+    }
     const track = state.analysisTracks.find((t) => t.id === drag.trackId);
     const note = track ? track.notes.find((n) => n.id === drag.id) : null;
     if (!note) return;
@@ -3179,6 +3457,22 @@ if (ui.analysisNotes) {
         state.analysisShiftWindow = range;
       }
       state.analysisShiftDrag = null;
+      drawAnalysisNotes();
+      return;
+    }
+    if (state.analysisDrag?.mode === 'box-select' && state.analysisBoxSelect) {
+      const rect = ui.analysisNotes.getBoundingClientRect();
+      const hits = collectNotesInSelectionRect(state.analysisBoxSelect, rect.width, rect.height);
+      clearAnalysisSelection({ keepPreview: true });
+      const set = ensureAnalysisSelectionSet();
+      hits.forEach((item) => {
+        set.add(makeAnalysisSelectionKey(item.track.id, item.note.id));
+      });
+      const first = hits[0] || null;
+      state.analysisSelectedTrackId = first ? first.track.id : null;
+      state.analysisSelectedId = first ? first.note.id : null;
+      state.analysisBoxSelect = null;
+      state.analysisDrag = null;
       drawAnalysisNotes();
       return;
     }

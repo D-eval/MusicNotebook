@@ -100,6 +100,12 @@ const ui = {
   waveZoomOutKey: document.getElementById('waveZoomOutKey'),
   zoomInfo: document.getElementById('zoomInfo'),
   timeInfo: document.getElementById('timeInfo'),
+  songMetronomeBpm: document.getElementById('songMetronomeBpm'),
+  songMetronomeSignature: document.getElementById('songMetronomeSignature'),
+  songMetronomeOffset: document.getElementById('songMetronomeOffset'),
+  songMetronomeAudioVolume: document.getElementById('songMetronomeAudioVolume'),
+  songMetronomeBeatVolume: document.getElementById('songMetronomeBeatVolume'),
+  songMetronomeAssign: document.getElementById('songMetronomeAssign'),
   addEditorAnnotation: document.getElementById('addEditorAnnotation'),
   goAnalysis: document.getElementById('goAnalysis'),
   analysisBack: document.getElementById('analysisBack'),
@@ -171,6 +177,13 @@ const state = {
   trimRegion: null,
   saveDirectoryHandle: null,
   zoomPxPerSec: 80,
+  songMetronomeBpm: 120,
+  songMetronomeSignature: '4/4',
+  songMetronomeOffset: 0,
+  songMetronomeAudioVolume: 0.8,
+  songMetronomeBeatVolume: 0.7,
+  songMetronomeOverlayEl: null,
+  songMetronome: null,
   loopRegionPlayback: false,
   trimCreateMode: false,
   pendingTrimStart: null,
@@ -199,6 +212,8 @@ const state = {
   analysisTool: 'pencil',
   analysisSelectedId: null,
   analysisSelectedTrackId: null,
+  analysisSelectedKeys: new Set(),
+  analysisBoxSelect: null,
   analysisShowRootThreshold: true,
   analysisShowBeatThreshold: false,
   analysisTracks: [],
@@ -256,6 +271,13 @@ const MAX_ZOOM_PX_PER_SEC = 2000;
 const PROJECT_AUDIO_DIR = 'audio';
 const PROJECT_NOTES_DIR = 'notes';
 const PROJECT_AUDIO_EXT = '.mp3';
+const SONG_METRONOME_BPM_MIN = 20;
+const SONG_METRONOME_BPM_MAX = 400;
+const SONG_METRONOME_OFFSET_MIN = -60;
+const SONG_METRONOME_OFFSET_MAX = 60;
+const SONG_METRONOME_VOLUME_MIN = 0;
+const SONG_METRONOME_VOLUME_MAX = 1;
+const SONG_METRONOME_MAX_LINES = 8000;
 
 function showPage(name, animClass = '') {
   Object.values(pages).forEach((p) => p.classList.remove('active'));
@@ -294,6 +316,156 @@ function normalizeRegionBounds(start, end, duration) {
   const s = Math.max(0, Math.min(Number(start) || 0, d));
   const e = Math.max(0, Math.min(Number(end) || 0, d));
   return { start: Math.min(s, e), end: Math.max(s, e) };
+}
+
+function normalizeSongMetronomeBpm(value, fallback = 120) {
+  const v = Number(value);
+  if (!Number.isFinite(v)) return fallback;
+  return Math.round(Math.max(SONG_METRONOME_BPM_MIN, Math.min(SONG_METRONOME_BPM_MAX, v)) * 100) / 100;
+}
+
+function normalizeSongMetronomeSignature(value, fallback = '4/4') {
+  const raw = String(value ?? '').trim();
+  const match = raw.match(/^(\d+)\s*\/\s*(\d+)$/);
+  if (!match) return fallback;
+  const num = Math.max(1, Math.min(32, parseInt(match[1], 10) || 4));
+  const den = Math.max(1, Math.min(32, parseInt(match[2], 10) || 4));
+  return `${num}/${den}`;
+}
+
+function normalizeSongMetronomeOffset(value, fallback = 0) {
+  const v = Number(value);
+  if (!Number.isFinite(v)) return fallback;
+  return Math.max(SONG_METRONOME_OFFSET_MIN, Math.min(SONG_METRONOME_OFFSET_MAX, v));
+}
+
+function normalizeSongMetronomeVolume(value, fallback = 0.8) {
+  const v = Number(value);
+  if (!Number.isFinite(v)) return fallback;
+  return Math.round(Math.max(SONG_METRONOME_VOLUME_MIN, Math.min(SONG_METRONOME_VOLUME_MAX, v)) * 100) / 100;
+}
+
+function getSongMetronomeMeter() {
+  const bpm = normalizeSongMetronomeBpm(state.songMetronomeBpm, 120);
+  const signature = normalizeSongMetronomeSignature(state.songMetronomeSignature, '4/4');
+  const [numRaw, denRaw] = signature.split('/');
+  const beatsPerBar = Math.max(1, parseInt(numRaw, 10) || 4);
+  const denominator = Math.max(1, parseInt(denRaw, 10) || 4);
+  const beatSec = bpm > 0 ? (60 / bpm) * (4 / denominator) : 0;
+  return { bpm, signature, beatsPerBar, denominator, beatSec };
+}
+
+function applySongMetronomeInputsFromState() {
+  if (ui.songMetronomeBpm) ui.songMetronomeBpm.value = String(state.songMetronomeBpm);
+  if (ui.songMetronomeSignature) ui.songMetronomeSignature.value = state.songMetronomeSignature;
+  if (ui.songMetronomeOffset) ui.songMetronomeOffset.value = String(state.songMetronomeOffset);
+  if (ui.songMetronomeAudioVolume) ui.songMetronomeAudioVolume.value = String(state.songMetronomeAudioVolume);
+  if (ui.songMetronomeBeatVolume) ui.songMetronomeBeatVolume.value = String(state.songMetronomeBeatVolume);
+}
+
+function applySongAudioVolume() {
+  if (!state.wave || typeof state.wave.setVolume !== 'function') return;
+  const v = normalizeSongMetronomeVolume(state.songMetronomeAudioVolume, 0.8);
+  state.wave.setVolume(v);
+}
+
+function stopSongMetronome() {
+  const metro = state.songMetronome;
+  if (!metro) return;
+  if (metro.timer) clearInterval(metro.timer);
+  try {
+    metro.ctx.close();
+  } catch {}
+  state.songMetronome = null;
+}
+
+function applySongMetronomeVolume() {
+  if (!state.songMetronome || !state.songMetronome.master) return;
+  const v = normalizeSongMetronomeVolume(state.songMetronomeBeatVolume, 0.7);
+  state.songMetronome.master.gain.value = v;
+}
+
+function scheduleSongMetronomeClick(ctx, destination, when, strong = false, gainScale = 1) {
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'square';
+  osc.frequency.setValueAtTime(strong ? 1600 : 1100, when);
+  const base = strong ? 0.16 : 0.11;
+  const a = Math.max(0, Math.min(1, base * gainScale));
+  gain.gain.setValueAtTime(0.0001, when);
+  gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, a), when + 0.002);
+  gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.06);
+  osc.connect(gain);
+  gain.connect(destination);
+  osc.start(when);
+  osc.stop(when + 0.08);
+}
+
+function startSongMetronome() {
+  if (!state.wave || !state.wave.isReady || !state.wave.isPlaying()) return;
+  const meter = getSongMetronomeMeter();
+  const beatSec = meter.beatSec;
+  if (!(beatSec > 0)) return;
+  const volume = normalizeSongMetronomeVolume(state.songMetronomeBeatVolume, 0.7);
+  if (volume <= 0) {
+    stopSongMetronome();
+    return;
+  }
+  const offset = normalizeSongMetronomeOffset(state.songMetronomeOffset, 0);
+  stopSongMetronome();
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+  const ctx = new Ctx();
+  const master = ctx.createGain();
+  master.connect(ctx.destination);
+  master.gain.value = volume;
+
+  let beatIndex = Math.ceil((Number(state.wave.getCurrentTime()) - offset) / beatSec);
+  if (!Number.isFinite(beatIndex)) beatIndex = 0;
+
+  const metro = {
+    ctx,
+    master,
+    beatIndex,
+    beatSec,
+    offset,
+    timer: null
+  };
+  const scheduleAhead = 0.12;
+  const lookaheadMs = 25;
+  metro.timer = setInterval(() => {
+    if (!state.wave || !state.wave.isPlaying()) return;
+    const waveNow = Number(state.wave.getCurrentTime()) || 0;
+    const audioNow = ctx.currentTime;
+    while (offset + metro.beatIndex * beatSec <= waveNow + scheduleAhead) {
+      const beatTime = offset + metro.beatIndex * beatSec;
+      if (beatTime >= waveNow - 0.02) {
+        const when = audioNow + Math.max(0, beatTime - waveNow);
+        const strong = metro.beatIndex % Math.max(1, meter.beatsPerBar) === 0;
+        scheduleSongMetronomeClick(ctx, master, when, strong, 1);
+      }
+      metro.beatIndex += 1;
+    }
+  }, lookaheadMs);
+  state.songMetronome = metro;
+  ctx.resume?.();
+}
+
+function syncSongMetronomeFromNotes(notes = state.notes) {
+  const first = Array.isArray(notes) ? notes[0] : null;
+  const base = first?.analysisMetronome && typeof first.analysisMetronome === 'object'
+    ? first.analysisMetronome
+    : null;
+  state.songMetronomeBpm = normalizeSongMetronomeBpm(base?.bpm ?? 120, 120);
+  state.songMetronomeSignature = normalizeSongMetronomeSignature(base?.signature ?? '4/4', '4/4');
+  state.songMetronomeOffset = normalizeSongMetronomeOffset(base?.offset ?? 0, 0);
+  const legacyVolumeRatio = normalizeSongMetronomeVolume(base?.volumeRatio ?? 0.7, 0.7);
+  state.songMetronomeAudioVolume = normalizeSongMetronomeVolume(base?.audioVolume ?? 0.8, 0.8);
+  state.songMetronomeBeatVolume = normalizeSongMetronomeVolume(base?.metronomeVolume ?? legacyVolumeRatio, legacyVolumeRatio);
+  applySongMetronomeInputsFromState();
+  applySongAudioVolume();
+  applySongMetronomeVolume();
+  renderSongMetronomeLines();
 }
 
 function seekWaveTo(seconds) {
@@ -473,6 +645,11 @@ function normalizeNote(note) {
     bpm: Math.round(Math.max(1, Math.min(400, Number(analysisMetronomeRaw?.bpm ?? 120) || 120)) * 100) / 100,
     signature: typeof analysisMetronomeRaw?.signature === 'string' ? analysisMetronomeRaw.signature : '4/4',
     offset: Number(analysisMetronomeRaw?.offset ?? 0) || 0,
+    audioVolume: normalizeSongMetronomeVolume(analysisMetronomeRaw?.audioVolume ?? 0.8, 0.8),
+    metronomeVolume: normalizeSongMetronomeVolume(
+      analysisMetronomeRaw?.metronomeVolume ?? analysisMetronomeRaw?.volumeRatio ?? 0.7,
+      0.7
+    ),
     gridDivision: typeof analysisMetronomeRaw?.gridDivision === 'string' ? analysisMetronomeRaw.gridDivision : '16',
     muted: !!analysisMetronomeRaw?.muted,
     solo: !!analysisMetronomeRaw?.solo
@@ -1272,11 +1449,134 @@ function clearActiveRegion() {
   state.loopRegionPlayback = false;
 }
 
+function clearSongMetronomeOverlay() {
+  if (!state.songMetronomeOverlayEl) return;
+  state.songMetronomeOverlayEl.remove();
+  state.songMetronomeOverlayEl = null;
+}
+
+function ensureSongMetronomeOverlay() {
+  const wrapper = state.wave?.drawer?.wrapper;
+  if (!wrapper) return null;
+  if (!state.songMetronomeOverlayEl || !wrapper.contains(state.songMetronomeOverlayEl)) {
+    clearSongMetronomeOverlay();
+    const overlay = document.createElement('div');
+    overlay.className = 'song-metronome-lines';
+    if (!wrapper.style.position) wrapper.style.position = 'relative';
+    wrapper.appendChild(overlay);
+    state.songMetronomeOverlayEl = overlay;
+  }
+  return state.songMetronomeOverlayEl;
+}
+
+function getSongWaveContentWidth() {
+  const wrapper = state.wave?.drawer?.wrapper;
+  if (!wrapper) return 0;
+  const waveEl = wrapper.querySelector('wave');
+  if (waveEl) {
+    const w = Math.max(
+      Number(waveEl.scrollWidth) || 0,
+      Number(waveEl.clientWidth) || 0,
+      Number(waveEl.getBoundingClientRect?.().width || 0)
+    );
+    if (w > 0) return w;
+  }
+  const duration = state.wave?.getDuration?.() || 0;
+  return Math.max((duration > 0 ? duration * state.zoomPxPerSec : 0), wrapper.clientWidth || 0);
+}
+
+function renderSongMetronomeLines() {
+  if (!state.wave || !state.wave.isReady) return;
+  const wrapper = state.wave.drawer?.wrapper;
+  if (!wrapper) return;
+  const duration = state.wave.getDuration() || 0;
+  if (!(duration > 0)) {
+    clearSongMetronomeOverlay();
+    return;
+  }
+  const overlay = ensureSongMetronomeOverlay();
+  if (!overlay) return;
+
+  // Use the real waveform content width; avoid using wrapper.scrollWidth because
+  // it can include this overlay itself and drift over repeated renders.
+  const width = getSongWaveContentWidth();
+  if (!(width > 0)) return;
+  overlay.style.width = `${width}px`;
+  overlay.innerHTML = '';
+
+  const meter = getSongMetronomeMeter();
+  const beatSec = meter.beatSec;
+  if (!(beatSec > 0)) return;
+  const offset = normalizeSongMetronomeOffset(state.songMetronomeOffset, 0);
+  const pxPerSec = duration > 0 ? width / duration : state.zoomPxPerSec;
+  if (!(pxPerSec > 0)) return;
+
+  let beatIndex = Math.floor((0 - offset) / beatSec);
+  if (!Number.isFinite(beatIndex)) beatIndex = 0;
+  let t = offset + beatIndex * beatSec;
+  while (t < 0) {
+    beatIndex += 1;
+    t = offset + beatIndex * beatSec;
+  }
+
+  const frag = document.createDocumentFragment();
+  let count = 0;
+  while (t <= duration && count < SONG_METRONOME_MAX_LINES) {
+    const line = document.createElement('span');
+    line.className = 'song-metronome-line';
+    line.style.left = `${Math.max(0, t * pxPerSec).toFixed(2)}px`;
+    if (beatIndex % Math.max(1, meter.beatsPerBar) === 0) line.style.background = 'rgba(29, 78, 216, 0.62)';
+    frag.appendChild(line);
+    beatIndex += 1;
+    t = offset + beatIndex * beatSec;
+    count += 1;
+  }
+  overlay.appendChild(frag);
+}
+
+function assignSongMetronomeToAllNotes() {
+  if (!Array.isArray(state.notes) || !state.notes.length) {
+    alert('当前没有可分配的片段');
+    return;
+  }
+  const bpm = normalizeSongMetronomeBpm(state.songMetronomeBpm, 120);
+  const signature = normalizeSongMetronomeSignature(state.songMetronomeSignature, '4/4');
+  const offset = normalizeSongMetronomeOffset(state.songMetronomeOffset, 0);
+  const audioVolume = normalizeSongMetronomeVolume(state.songMetronomeAudioVolume, 0.8);
+  const metronomeVolume = normalizeSongMetronomeVolume(state.songMetronomeBeatVolume, 0.7);
+  const ok = window.confirm(`确认将当前节拍器参数分配到全部 ${state.notes.length} 个片段？`);
+  if (!ok) return;
+  state.notes = state.notes.map((note) => {
+    const base = note?.analysisMetronome && typeof note.analysisMetronome === 'object'
+      ? note.analysisMetronome
+      : {};
+    return {
+      ...note,
+      analysisMetronome: {
+        bpm,
+        signature,
+        offset,
+        audioVolume,
+        metronomeVolume,
+        gridDivision: typeof base.gridDivision === 'string' ? base.gridDivision : '16',
+        muted: !!base.muted,
+        solo: !!base.solo
+      }
+    };
+  });
+  renderNotes();
+  alert(`已分配到 ${state.notes.length} 个片段`);
+}
+
 function applyWaveZoom(nextZoom) {
   state.zoomPxPerSec = Math.max(MIN_ZOOM_PX_PER_SEC, Math.min(MAX_ZOOM_PX_PER_SEC, nextZoom));
   if (state.wave) state.wave.zoom(state.zoomPxPerSec);
   ui.zoomInfo.textContent = `缩放: ${Math.round(state.zoomPxPerSec)}`;
   renderNoteMarkers();
+  requestAnimationFrame(() => {
+    renderSongMetronomeLines();
+    requestAnimationFrame(renderSongMetronomeLines);
+  });
 }
 
 function panWaveBy(secondsDelta) {
@@ -1505,18 +1805,30 @@ function initWave() {
       })
     ]
   });
+  applySongAudioVolume();
 
   state.wave.on('ready', () => {
+    applySongAudioVolume();
     ui.zoomInfo.textContent = `缩放: ${Math.round(state.zoomPxPerSec)}`;
     formatWaveTime();
     renderNoteRegions();
     renderNoteMarkers();
+    renderSongMetronomeLines();
     if (state.activeRegion) {
       renderActiveRegion(state.activeRegion.start, state.activeRegion.end);
     }
   });
 
   state.wave.on('seek', formatWaveTime);
+  state.wave.on('play', () => {
+    startSongMetronome();
+  });
+  state.wave.on('pause', () => {
+    stopSongMetronome();
+  });
+  state.wave.on('finish', () => {
+    stopSongMetronome();
+  });
   state.wave.on('audioprocess', () => {
     formatWaveTime();
     if (state.loopRegionPlayback && state.activeRegion) {
@@ -1704,6 +2016,9 @@ function loadAudioBlob(blob, name = 'song.wav') {
   state.audioUrl = URL.createObjectURL(blob);
 
   initWave();
+  applySongAudioVolume();
+  stopSongMetronome();
+  clearSongMetronomeOverlay();
   state.wave.load(state.audioUrl);
   state.loopRegionPlayback = false;
   state.activeRegion = null;
@@ -1758,6 +2073,11 @@ function resetNotebookState() {
   state.sourceParentDirHandle = null;
   state.sourceFileName = '';
   state.notes = [];
+  state.songMetronomeBpm = 120;
+  state.songMetronomeSignature = '4/4';
+  state.songMetronomeOffset = 0;
+  state.songMetronomeAudioVolume = 0.8;
+  state.songMetronomeBeatVolume = 0.7;
   state.activeRegion = null;
   state.pendingNoteRange = null;
   state.selectedTagsDraft = [];
@@ -1777,9 +2097,11 @@ function resetNotebookState() {
   renderSelectedTags();
   renderSongTags();
   renderNotes();
+  stopSongMetronome();
   if (state.wave) {
     state.wave.empty();
   }
+  clearSongMetronomeOverlay();
   if (state.editorWave) {
     state.editorWave.empty();
   }
@@ -1787,6 +2109,7 @@ function resetNotebookState() {
     URL.revokeObjectURL(state.editorPreviewUrl);
     state.editorPreviewUrl = null;
   }
+  applySongMetronomeInputsFromState();
   updateInlineImportVisibility();
 }
 
@@ -2092,6 +2415,11 @@ function makeNotesJson(audioNameOverride = null) {
         bpm: Math.round(Math.max(1, Math.min(400, Number(n?.analysisMetronome?.bpm ?? 120) || 120)) * 100) / 100,
         signature: typeof n?.analysisMetronome?.signature === 'string' ? n.analysisMetronome.signature : '4/4',
         offset: Number(n?.analysisMetronome?.offset ?? 0) || 0,
+        audioVolume: normalizeSongMetronomeVolume(n?.analysisMetronome?.audioVolume ?? 0.8, 0.8),
+        metronomeVolume: normalizeSongMetronomeVolume(
+          n?.analysisMetronome?.metronomeVolume ?? n?.analysisMetronome?.volumeRatio ?? 0.7,
+          0.7
+        ),
         gridDivision: typeof n?.analysisMetronome?.gridDivision === 'string' ? n.analysisMetronome.gridDivision : '16',
         muted: !!n?.analysisMetronome?.muted,
         solo: !!n?.analysisMetronome?.solo
@@ -2201,6 +2529,7 @@ async function importProjectFiles(files) {
   state.notes = [];
   state.songTagsDraft = [];
   state.songCaptionDraft = '';
+  syncSongMetronomeFromNotes([]);
   ui.songCaption.value = '';
   clearActiveRegion();
   renderSongTags();
@@ -2252,6 +2581,7 @@ async function openSongFromNotebook(songName) {
     setSourceAudio(file, file.name, { parentDirHandle: picked.parentDir, fileName: picked.entry.name });
     loadAudioBlob(file, file.name);
     state.notes = notes;
+    syncSongMetronomeFromNotes(notes);
     state.songTagsDraft = Array.from(new Set(songInfo.tags));
     state.songCaptionDraft = songInfo.caption || '';
     ui.songCaption.value = state.songCaptionDraft;
@@ -2877,9 +3207,11 @@ function openEditorWithCurrentRegion() {
   state.pendingAnalysisNotes = [];
   state.pendingAnalysisTracks = [];
   state.pendingAnalysisMetronome = {
-    bpm: 120,
-    signature: '4/4',
-    offset: 0,
+    bpm: normalizeSongMetronomeBpm(state.songMetronomeBpm, 120),
+    signature: normalizeSongMetronomeSignature(state.songMetronomeSignature, '4/4'),
+    offset: normalizeSongMetronomeOffset(state.songMetronomeOffset, 0),
+    audioVolume: normalizeSongMetronomeVolume(state.songMetronomeAudioVolume, 0.8),
+    metronomeVolume: normalizeSongMetronomeVolume(state.songMetronomeBeatVolume, 0.7),
     gridDivision: '16',
     muted: false,
     solo: false
@@ -2927,6 +3259,11 @@ function openEditorForNoteIndex(index) {
     bpm: Math.round(Math.max(1, Math.min(400, Number(note?.analysisMetronome?.bpm ?? 120) || 120)) * 100) / 100,
     signature: typeof note?.analysisMetronome?.signature === 'string' ? note.analysisMetronome.signature : '4/4',
     offset: Number(note?.analysisMetronome?.offset ?? 0) || 0,
+    audioVolume: normalizeSongMetronomeVolume(note?.analysisMetronome?.audioVolume ?? 0.8, 0.8),
+    metronomeVolume: normalizeSongMetronomeVolume(
+      note?.analysisMetronome?.metronomeVolume ?? note?.analysisMetronome?.volumeRatio ?? 0.7,
+      0.7
+    ),
     gridDivision: typeof note?.analysisMetronome?.gridDivision === 'string' ? note.analysisMetronome.gridDivision : '16',
     muted: !!note?.analysisMetronome?.muted,
     solo: !!note?.analysisMetronome?.solo
@@ -2978,6 +3315,11 @@ function saveNoteEntry(nextPage = 'notes') {
       bpm: Math.round(Math.max(1, Math.min(400, Number(state.pendingAnalysisMetronome?.bpm ?? 120) || 120)) * 100) / 100,
       signature: typeof state.pendingAnalysisMetronome?.signature === 'string' ? state.pendingAnalysisMetronome.signature : '4/4',
       offset: Number(state.pendingAnalysisMetronome?.offset ?? 0) || 0,
+      audioVolume: normalizeSongMetronomeVolume(state.pendingAnalysisMetronome?.audioVolume ?? 0.8, 0.8),
+      metronomeVolume: normalizeSongMetronomeVolume(
+        state.pendingAnalysisMetronome?.metronomeVolume ?? state.pendingAnalysisMetronome?.volumeRatio ?? 0.7,
+        0.7
+      ),
       gridDivision: typeof state.pendingAnalysisMetronome?.gridDivision === 'string' ? state.pendingAnalysisMetronome.gridDivision : '16',
       muted: !!state.pendingAnalysisMetronome?.muted,
       solo: !!state.pendingAnalysisMetronome?.solo
@@ -3127,6 +3469,73 @@ ui.waveLeftKey.addEventListener('click', () => panWaveBy(-2.5));
 ui.waveRightKey.addEventListener('click', () => panWaveBy(2.5));
 ui.waveZoomInKey.addEventListener('click', () => applyWaveZoom(state.zoomPxPerSec + 24));
 ui.waveZoomOutKey.addEventListener('click', () => applyWaveZoom(state.zoomPxPerSec - 24));
+if (ui.songMetronomeBpm) {
+  ui.songMetronomeBpm.addEventListener('input', () => {
+    const raw = Number(ui.songMetronomeBpm.value);
+    if (!Number.isFinite(raw)) return;
+    state.songMetronomeBpm = normalizeSongMetronomeBpm(raw, state.songMetronomeBpm || 120);
+    renderSongMetronomeLines();
+    if (state.wave?.isPlaying()) startSongMetronome();
+  });
+  const commitBpmInput = () => {
+    state.songMetronomeBpm = normalizeSongMetronomeBpm(ui.songMetronomeBpm.value, state.songMetronomeBpm || 120);
+    ui.songMetronomeBpm.value = String(state.songMetronomeBpm);
+    renderSongMetronomeLines();
+    if (state.wave?.isPlaying()) startSongMetronome();
+  };
+  ui.songMetronomeBpm.addEventListener('change', commitBpmInput);
+  ui.songMetronomeBpm.addEventListener('blur', commitBpmInput);
+}
+if (ui.songMetronomeSignature) {
+  const commitSignatureInput = () => {
+    state.songMetronomeSignature = normalizeSongMetronomeSignature(ui.songMetronomeSignature.value, state.songMetronomeSignature || '4/4');
+    ui.songMetronomeSignature.value = state.songMetronomeSignature;
+    renderSongMetronomeLines();
+    if (state.wave?.isPlaying()) startSongMetronome();
+  };
+  ui.songMetronomeSignature.addEventListener('change', commitSignatureInput);
+  ui.songMetronomeSignature.addEventListener('blur', commitSignatureInput);
+}
+if (ui.songMetronomeOffset) {
+  ui.songMetronomeOffset.addEventListener('input', () => {
+    const raw = Number(ui.songMetronomeOffset.value);
+    if (!Number.isFinite(raw)) return;
+    state.songMetronomeOffset = normalizeSongMetronomeOffset(raw, state.songMetronomeOffset || 0);
+    renderSongMetronomeLines();
+    if (state.wave?.isPlaying()) startSongMetronome();
+  });
+  const commitOffsetInput = () => {
+    state.songMetronomeOffset = normalizeSongMetronomeOffset(ui.songMetronomeOffset.value, state.songMetronomeOffset || 0);
+    ui.songMetronomeOffset.value = String(Math.round(state.songMetronomeOffset * 100) / 100);
+    renderSongMetronomeLines();
+    if (state.wave?.isPlaying()) startSongMetronome();
+  };
+  ui.songMetronomeOffset.addEventListener('change', commitOffsetInput);
+  ui.songMetronomeOffset.addEventListener('blur', commitOffsetInput);
+}
+if (ui.songMetronomeAudioVolume) {
+  ui.songMetronomeAudioVolume.addEventListener('input', () => {
+    state.songMetronomeAudioVolume = normalizeSongMetronomeVolume(
+      ui.songMetronomeAudioVolume.value,
+      state.songMetronomeAudioVolume || 0.8
+    );
+    ui.songMetronomeAudioVolume.value = String(state.songMetronomeAudioVolume);
+    applySongAudioVolume();
+  });
+}
+if (ui.songMetronomeBeatVolume) {
+  ui.songMetronomeBeatVolume.addEventListener('input', () => {
+    state.songMetronomeBeatVolume = normalizeSongMetronomeVolume(
+      ui.songMetronomeBeatVolume.value,
+      state.songMetronomeBeatVolume || 0.7
+    );
+    ui.songMetronomeBeatVolume.value = String(state.songMetronomeBeatVolume);
+    applySongMetronomeVolume();
+  });
+}
+if (ui.songMetronomeAssign) {
+  ui.songMetronomeAssign.addEventListener('click', assignSongMetronomeToAllNotes);
+}
 ui.trimGain.addEventListener('input', () => {
   ui.trimGainInfo.textContent = `当前增益：${Number(ui.trimGain.value).toFixed(2)}x`;
 });
@@ -3154,6 +3563,7 @@ if (ui.guideClose) {
   ui.guideClose.addEventListener('click', closeBeginnerGuide);
 }
 window.addEventListener('resize', () => {
+  renderSongMetronomeLines();
   if (!state.guideActive) return;
   requestAnimationFrame(renderBeginnerGuideStep);
 });
@@ -3287,3 +3697,4 @@ updateSavePathInfo();
 renderSelectedTags();
 renderSongTags();
 renderNotes();
+applySongMetronomeInputsFromState();

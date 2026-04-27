@@ -167,6 +167,23 @@ fieldset label {
   position: relative;
 }
 
+.song-metronome-lines {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.song-metronome-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(30, 64, 175, 0.38);
+}
+
 .wave-wrap wave {
   overflow-x: scroll !important;
   overflow-y: hidden !important;
@@ -752,6 +769,41 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.song-metronome-panel {
+  margin-top: 10px;
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  border: 1px dashed rgba(37, 99, 235, 0.4);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(219, 234, 254, 0.35);
+}
+
+.song-metronome-title {
+  font-size: 13px;
+  color: #1d4ed8;
+  font-weight: 600;
+  margin-right: 2px;
+}
+
+.song-metronome-panel label {
+  min-width: 140px;
+}
+
+.song-metronome-panel input[type="number"] {
+  margin-top: 2px;
+}
+
+.song-metronome-panel input[type="range"] {
+  margin-top: 6px;
+}
+
+.song-metronome-panel button {
+  margin-left: auto;
 }
 
 .keycap {

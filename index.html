@@ -104,6 +104,46 @@
             <span id="zoomInfo" class="mono">缩放: 80</span>
             <span id="timeInfo" class="mono">00:00.00 / 00:00.00</span>
           </div>
+          <div class="song-metronome-panel">
+            <span class="song-metronome-title">全局节拍器</span>
+            <label>
+              BPM
+              <input id="songMetronomeBpm" type="number" min="20" max="400" step="0.01" value="120" />
+            </label>
+            <label>
+              拍号
+              <input
+                id="songMetronomeSignature"
+                type="text"
+                value="4/4"
+                placeholder="例如 7/8"
+                inputmode="numeric"
+                list="songMetronomeSignaturePresets"
+              />
+              <datalist id="songMetronomeSignaturePresets">
+                <option value="4/4"></option>
+                <option value="3/4"></option>
+                <option value="3/8"></option>
+                <option value="1/4"></option>
+                <option value="5/4"></option>
+                <option value="6/8"></option>
+                <option value="7/8"></option>
+              </datalist>
+            </label>
+            <label>
+              Offset(s)
+              <input id="songMetronomeOffset" type="number" min="-60" max="60" step="0.01" value="0" />
+            </label>
+            <label>
+              音频音量
+              <input id="songMetronomeAudioVolume" type="range" min="0" max="1" step="0.01" value="0.8" />
+            </label>
+            <label>
+              节拍器音量
+              <input id="songMetronomeBeatVolume" type="range" min="0" max="1" step="0.01" value="0.7" />
+            </label>
+            <button id="songMetronomeAssign" type="button" class="ghost">分配</button>
+          </div>
           <div class="note-keybar" aria-label="wave controls">
             <span id="wavePlayKey" class="keycap">播放</span>
             <span id="waveLeftKey" class="keycap">左移</span>
