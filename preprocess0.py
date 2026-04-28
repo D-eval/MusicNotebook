@@ -63,6 +63,7 @@ def save_h5(temp_save_path, chord_stacks, segment_wave,
         f.attrs["start"] = start
         f.attrs["sustain"] = duration
         f.attrs["samplerate"] = sr
+        
         f.attrs["bpm"] = bpm
         f.attrs["bpm_offset"] = bpm_offset
 

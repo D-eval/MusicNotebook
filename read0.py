@@ -36,6 +36,8 @@ def load_h5(temp_save_path):
             "start": f.attrs["start"],
             "sustain": f.attrs["sustain"],
             "samplerate": f.attrs["samplerate"],
+            "bpm": f.attrs["bpm"],
+            "bpm_offset": f.attrs["bpm_offset"],
         }
 
         # -------- chord_stacks --------
@@ -46,6 +48,9 @@ def load_h5(temp_save_path):
         root_arr = g["root"][:] # (N,)
         tonic_arr = g["tonic"][:] # (N,)
         chord_arr = g["chord"][:] # (N, 12)
+        
+        beat_arr = g["beat"][:] # (beat,) float
+        downbeat_arr = g["downbeat"][:] # (beat,) bool
 
         N, K = chord_arr.shape
         assert K==12
@@ -56,6 +61,8 @@ def load_h5(temp_save_path):
             "root": root_arr,
             "tonic": tonic_arr,
             "chord": chord_arr,
+            "beat": beat_arr,
+            "downbeat": downbeat_arr,
         }
     # List[ Dict ] * Ne
     return segment_wave, target, meta
@@ -182,6 +189,10 @@ class AudioDataset(Dataset):
 
 # from torch.utils.data import DataLoader
 # dataset = AudioDataset("../preprocess0")
+# h5_path = dataset.paths[0]
+# audio, target, meta = load_h5(h5_path)
+
+
 # loader = DataLoader(
 #     dataset,
 #     batch_size=2,
