@@ -22,7 +22,8 @@ import h5py
 import numpy as np
 
 def save_h5(temp_save_path, chord_stacks, segment_wave, 
-            song_name, start, duration, sr):
+            song_name, start, duration, sr,
+            beat, downbeat, bpm, bpm_offset):
     """
     chord_stacks: List[Dict {
         start: float
@@ -62,6 +63,8 @@ def save_h5(temp_save_path, chord_stacks, segment_wave,
         f.attrs["start"] = start
         f.attrs["sustain"] = duration
         f.attrs["samplerate"] = sr
+        f.attrs["bpm"] = bpm
+        f.attrs["bpm_offset"] = bpm_offset
 
         # chord group
         g = f.create_group("chord_stacks")
@@ -70,6 +73,9 @@ def save_h5(temp_save_path, chord_stacks, segment_wave,
         g.create_dataset("root", data=root_arr)
         g.create_dataset("tonic", data=tonic_arr)
         g.create_dataset("chord", data=chord_arr)
+        
+        g.create_dataset("beat", data=beat)
+        g.create_dataset("downbeat", data=downbeat)
 
 
 
@@ -99,23 +105,28 @@ data_counts = 0
 
 samplerate = 44100
 
-for temp_dir in root_dir.iterdir():
-    if not temp_dir.is_dir():
-        continue
-    if ".git" in str(temp_dir):
+audio_dir = root_dir / "audio"
+json_dir = root_dir / "notes"
+
+for temp_dir in json_dir.iterdir():
+    if not temp_dir.name.endswith(".json"):
         continue
 
-    song_name = temp_dir.name
+    song_name = temp_dir.name[:-5]
 
-    json_path = temp_dir / "notes.json"
-    wave_path = temp_dir / f"{song_name}.mp3"
+    json_path = json_dir / f"{song_name}.json"
+    wave_path = audio_dir / f"{song_name}.mp3"
 
     try:
         wave, sr = librosa.load(str(wave_path), sr=samplerate, mono=False)
     except Exception as e:
-        print(f"⚠️ librosa failed → try ffmpeg: {e}")
-        wav_path = convert_to_wav(str(wave_path))
-        wave, sr = librosa.load(str(wav_path), sr=samplerate, mono=False)
+        try:
+            print(f"⚠️ librosa failed → try ffmpeg: {e}")
+            wav_path = convert_to_wav(str(wave_path))
+            wave, sr = librosa.load(str(wav_path), sr=samplerate, mono=False)
+        except:
+            print(f"没有读取音频:{song_name}")
+            continue
 
     wave = wave.T  # (C, T) → (T, C)
 
@@ -153,19 +164,42 @@ for temp_dir in root_dir.iterdir():
         # data['notes'][segment_idx]['analysisTracks'][track_id]['notes'][note_idx]
 
         tracks = data['notes'][segment_idx]['analysisTracks']
-
-
+        
+        metronome = data['notes'][segment_idx]['analysisMetronome']
+        beat_interval = 1 / (metronome['bpm'] / 60)
+        beat_start = metronome['offset']
+        signature = metronome['signature']
+        section_interval = beat_interval * int(signature.split('/')[0])
+        while beat_start > 0:
+            beat_start -= section_interval
+            
+        bpm = metronome['bpm']
+        bpm_offset = metronome['offset'] - segment_start
+        bpm_offset = bpm_offset % section_interval
+            
+        all_beat = np.arange(beat_start, wave.shape[0] / sr, beat_interval)
+        beat_select = (segment_start <= all_beat) * (all_beat <= segment_end)
+        all_beat = all_beat[beat_select]
+        all_beat = (all_beat * sr).astype(int)
+        is_downbeat = np.arange(len(all_beat)) % int(signature.split('/')[0]) == 0
+        
         root_idx = get_timbre_idx(tracks, '<root>')
         if root_idx is None:
+            print(f"没有标记和弦:{song_name}")
             continue
         chord_idx = get_timbre_idx(tracks, '<chord>')
         tonic_idx = get_timbre_idx(tracks, '<tonic>')
-
+        
+        useBeat_idx = get_timbre_idx(tracks, '<use_beat>')
 
         root_notes = tracks[root_idx]['notes']
         chord_notes = tracks[chord_idx]['notes']
         tonic_notes = tracks[tonic_idx]['notes']
-
+        
+        if useBeat_idx is not None:
+            useBeat_notes = tracks[useBeat_idx]['notes']
+            if not (len(useBeat_notes) == 0):
+                continue
 
         chord_stacks = []
 
@@ -183,9 +217,10 @@ for temp_dir in root_dir.iterdir():
                     temp_pitch = chord_note['midi'] % 12
                     chord.append(temp_pitch) if temp_pitch not in chord else None
 
-            tonic_note = [tonic_note['midi']%12 for tonic_note in tonic_notes if start-threshold <= tonic_note['startRel'] <= start+threshold][0]
+            tonic_note = [tonic_note['midi']%12 for tonic_note in tonic_notes if start-threshold <= tonic_note['startRel'] <= start+threshold]
+            tonic_note = tonic_note[0] if len(tonic_note)>0 else -1
 
-            chord += [tonic_note] if tonic_note not in chord else []
+            chord += [tonic_note] if (tonic_note not in chord) and (tonic_note != -1) else []
 
             chord_stacks += [{
                 "start": start,
@@ -203,7 +238,11 @@ for temp_dir in root_dir.iterdir():
                 data['audio'],
                 segment_start,
                 segment_duration,
-                sr)
+                sr,
+                all_beat,
+                is_downbeat,
+                bpm,
+                bpm_offset)
         data_counts += 1
 print("ok")
 
