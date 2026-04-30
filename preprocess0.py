@@ -147,7 +147,7 @@ for temp_dir in json_dir.iterdir():
         segment_duration = segment_end - segment_start
 
         print(segment_duration)
-        if segment_duration <= 5:
+        if segment_duration <= 4.99:
             continue
 
         segment_start_idx = int(segment_start * sr)
@@ -232,6 +232,9 @@ for temp_dir in json_dir.iterdir():
             }]
 
         temp_save_path = save_dir / f"{data_counts}.h5"
+
+        if len(chord_stacks)==0:
+            continue
 
         save_h5(temp_save_path,
                 chord_stacks,

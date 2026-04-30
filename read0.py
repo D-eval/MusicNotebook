@@ -3,6 +3,8 @@ from torch.utils.data import Dataset
 import h5py
 from pathlib import Path
 import random
+import math
+from data_arg import apply_augmentation
 
 def to_device(batch, device):
     if torch.is_tensor(batch):
@@ -50,7 +52,7 @@ def load_h5(temp_save_path):
         chord_arr = g["chord"][:] # (N, 12)
         
         beat_arr = g["beat"][:] # (beat,) float
-        downbeat_arr = g["downbeat"][:] # (beat,) bool
+        downbeat_arr = g["downbeat"][:].astype(float) # (beat,) bool
 
         N, K = chord_arr.shape
         assert K==12
@@ -78,21 +80,50 @@ def dict_concat(dict1, dict2):
         result[k] = new_v
     return result
 
+not_time_len_key_lst = [
+    "beat",
+    "downbeat",
+]
+
 def capture_time(target, start_sec, end_sec):
     valid_bool = (start_sec <= target['start']) * (target['start']<= end_sec)
     before_bool = (target['start'] < start_sec) *  (start_sec <= target['start'] + target['sustain'])
-    target_valid = {k: torch.tensor(v[valid_bool]) for k, v in target.items()}
-    target_before = {k: torch.tensor(v[before_bool]) for k, v in target.items()}
+    target_valid = {k: torch.tensor(v[valid_bool]) for k, v in target.items() if k not in not_time_len_key_lst}
+    target_before = {k: torch.tensor(v[before_bool]) for k, v in target.items() if k not in not_time_len_key_lst}
+    
+    ## begin ai
+    # 原始数据
+    start_all = torch.tensor(target["start"])
+    sustain_all = torch.tensor(target["sustain"])
+
+    # before mask
+    before_start = start_all[before_bool]
+    before_sustain = sustain_all[before_bool]
+
+    # 原事件结束时间
+    before_end = before_start + before_sustain
+
+    # 截断后的 sustain
+    new_sustain = torch.minimum(before_end, torch.tensor(end_sec)) - torch.tensor(start_sec)
+
+    # 更新
+    target_before["start"] = torch.zeros_like(new_sustain)  # 全部从0开始
+    target_before["sustain"] = new_sustain
+    ## end ai
+    
     target_valid["before"] = torch.zeros(valid_bool.sum())
     target_before["before"] = torch.ones(before_bool.sum())
-    target = dict_concat(target_valid, target_before)
-    target['start'] -= start_sec
-    return target
+    new_target = dict_concat(target_valid, target_before)
+    new_target['start'] -= start_sec
+    
+    for k in not_time_len_key_lst:
+        new_target[k] = target[k]
+    return new_target
 
 def cut_sample(wav, target, sr, start=None, duration=5):
     T = wav.shape[0]
     L = int(duration * sr)
-    assert T>=L, f"got {T}, sec:{T/sr}"
+    assert T>L, f"got {T}, sec:{T/sr}"
     start_idx = random.randint(0, T - L -1) if start is None else int(start * sr)
     end_idx = start_idx + L
     assert end_idx <= T-1
@@ -120,9 +151,9 @@ def collate_fn(batch):
 
 # 数据要经过 preprocess0.py 的加工
 class AudioDataset(Dataset):
-    def __init__(self, root_dir):
+    def __init__(self, root_dir, cfg):
         self.paths = sorted(list(Path(root_dir).glob("*.h5")))
-
+        self.cfg = cfg
     def __len__(self):
         return len(self.paths)
 
@@ -130,11 +161,25 @@ class AudioDataset(Dataset):
         h5_path = self.paths[idx]
 
         audio, target, meta = load_h5(h5_path)
-        audio, target = cut_sample(audio, target, meta["samplerate"])
+        while 1:
+            new_audio, new_target = cut_sample(audio, target, meta["samplerate"])
+            if len(new_target['start']) > 0:
+                break
+        audio = new_audio
+        target = new_target
+
         audio = torch.tensor(audio)
+        
+        
+        audio, target = apply_augmentation(audio, target, self.cfg, meta["samplerate"])
+        
+        
         audio_sum = audio.mean(-1)
         audio_minus = 0.5 * (audio[...,1] - audio[...,0])
         audio = torch.stack([audio_sum, audio_minus], dim=-1)
+        
+        target['bpm'] = torch.tensor(math.log(meta['bpm']))
+        target['offset'] = torch.tensor(meta['bpm_offset'])
         
         return audio, target
     
@@ -202,7 +247,8 @@ class AudioDataset(Dataset):
 #     pin_memory=True
 # )
 
-# for audios, targets in loader:
-#     # audios: (B, T)
-#     # targets: list[dict]
-#     print(audios.shape)
+# for epoch in range(2):
+#     for audios, targets in loader:
+#         # audios: (B, T)
+#         # targets: list[dict]
+#         print(audios.shape)
