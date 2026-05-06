@@ -29,6 +29,7 @@
             bpm: (1,), float
             offset: (1,), float
             is_4beat: (1,), bool
+            exist: (1,) bool
         }
 }
 """
@@ -94,20 +95,21 @@ def load_h5(temp_save_path):
         
         target = {
             "chord": {
-                "start": torch.tensor(start_arr)[:, None],  # (N, 1)
-                "sustain": torch.tensor(sustain_arr)[:, None],  # (N, 1)
-                "root": torch.tensor(root_arr), # (N)
-                "chord": torch.tensor(chord_arr), # (N, 12)
-                "tonic": torch.tensor(tonic_arr), # (N)
+                "start": torch.tensor(start_arr)[:, None].float(),  # (N, 1)
+                "sustain": torch.tensor(sustain_arr)[:, None].float(),  # (N, 1)
+                "root": torch.tensor(root_arr).long(), # (N)
+                "chord": torch.tensor(chord_arr).float(), # (N, 12)
+                "tonic": torch.tensor(tonic_arr).long(), # (N)
             },
             "beat": {
-                "beat": torch.tensor(beat_arr)[:,None], # (N2, 1)
+                "beat": torch.tensor(beat_arr)[:,None].float(), # (N2, 1)
                 "is_downbeat": torch.tensor(downbeat_arr)[:,None].float(), # (N2, 1)
             },
             "metronome": {
-                "bpm": torch.tensor(meta["bpm"]), # (1,)
-                "offset": torch.tensor(meta["bpm_offset"]), # (1,)
-                "is_4beat": torch.tensor(meta["signature"].split("/")[0]=="4"), # (1,)
+                "exist": torch.tensor([1.0]).float(), # (1,)
+                "bpm": torch.tensor([meta["bpm"]]).float(), # (1,)
+                "offset": torch.tensor([meta["bpm_offset"]]).float(), # (1,)
+                "is_4beat": torch.tensor([meta["signature"].split("/")[0]=="4"]).float(), # (1,)
             }
         }
     # List[ Dict ] * Ne

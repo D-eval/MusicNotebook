@@ -220,9 +220,9 @@ for temp_dir in json_dir.iterdir():
                     chord.append(temp_pitch) if temp_pitch not in chord else None
 
             tonic_note = [tonic_note['midi']%12 for tonic_note in tonic_notes if start-threshold <= tonic_note['startRel'] <= start+threshold]
-            tonic_note = tonic_note[0] if len(tonic_note)>0 else -1
+            tonic_note = tonic_note[0] if len(tonic_note)>0 else 12
 
-            chord += [tonic_note] if (tonic_note not in chord) and (tonic_note != -1) else []
+            chord += [tonic_note] if (tonic_note not in chord) and (tonic_note != 12) else []
 
             chord_stacks += [{
                 "start": start,
