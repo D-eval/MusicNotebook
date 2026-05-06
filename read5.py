@@ -94,7 +94,8 @@ def load_h5(temp_save_path):
         
         target = {
             "chord": {
-                "anchor": torch.stack([torch.tensor(start_arr), torch.tensor(sustain_arr)], dim=-1), # (N, 2)
+                "start": torch.tensor(start_arr)[:, None],  # (N, 1)
+                "sustain": torch.tensor(sustain_arr)[:, None],  # (N, 1)
                 "root": torch.tensor(root_arr), # (N)
                 "chord": torch.tensor(chord_arr), # (N, 12)
                 "tonic": torch.tensor(tonic_arr), # (N)
@@ -138,30 +139,32 @@ def cut_sample(wav, target, sr, start=None, duration=5.0):
 
     chord = target["chord"]
 
-    start_all = chord["anchor"][:, 0]
-    sustain_all = chord["anchor"][:, 1]
+    start_all = chord["start"]
+    sustain_all = chord["sustain"]
     end_all = start_all + sustain_all
 
     # -------- 分类 --------
     # 1. 在窗口内的 chord
     valid_mask = (start_all >= start_sec) & (start_all <= end_sec)
-
+    valid_mask = valid_mask.squeeze(-1)
     # 2. before chord（跨越左边界）
     before_mask = (start_all < start_sec) & (end_all > start_sec)
 
     # -------- 处理 valid chord --------
     chord_valid = {}
     if valid_mask.sum() > 0:
-        chord_valid["anchor"] = chord["anchor"][valid_mask].clone()
+        chord_valid["start"] = chord["start"][valid_mask].clone()
+        chord_valid["sustain"] = chord["sustain"][valid_mask].clone()
         chord_valid["root"] = chord["root"][valid_mask].clone()
         chord_valid["chord"] = chord["chord"][valid_mask].clone()
         chord_valid["tonic"] = chord["tonic"][valid_mask].clone()
 
         # start 平移
-        chord_valid["anchor"][:, 0] -= start_sec
+        chord_valid["start"][:, 0] -= start_sec
     else:
         chord_valid = {
-            "anchor": torch.zeros((0, 2)),
+            "start": torch.zeros((0, 1)),
+            "sustain": torch.zeros((0, 1)),
             "root": torch.zeros((0,), dtype=torch.long),
             "chord": torch.zeros((0, 12)),
             "tonic": torch.zeros((0,), dtype=torch.long),
@@ -188,10 +191,6 @@ def cut_sample(wav, target, sr, start=None, duration=5.0):
     else:
         chord_before = {
             "exist": torch.tensor([0.0]),
-            "sustain": torch.tensor([0.0]),
-            "root": torch.zeros((1,), dtype=torch.long),
-            "chord": torch.zeros((1, 12)),
-            "tonic": torch.zeros((1,), dtype=torch.long),
         }
 
     # -------- beat 过滤 --------
@@ -300,20 +299,20 @@ class AudioDataset(Dataset):
         return pitch_min, pitch_max, sorted_pitch
 
 
-from torch.utils.data import DataLoader
-dataset = AudioDataset("../preprocess0")
-h5_path = dataset.paths[0]
-audio, target, meta = load_h5(h5_path)
+# from torch.utils.data import DataLoader
+# dataset = AudioDataset("../preprocess0")
+# h5_path = dataset.paths[0]
+# audio, target, meta = load_h5(h5_path)
 
 
-loader = DataLoader(
-    dataset,
-    batch_size=2,
-    shuffle=True,
-    # num_workers=4,
-    collate_fn=collate_fn,
-    pin_memory=True
-)
+# loader = DataLoader(
+#     dataset,
+#     batch_size=2,
+#     shuffle=True,
+#     # num_workers=4,
+#     collate_fn=collate_fn,
+#     pin_memory=True
+# )
 
 # for audios, targets in loader:
 #     # audios: (B, T)
