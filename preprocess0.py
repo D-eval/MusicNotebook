@@ -23,7 +23,7 @@ import numpy as np
 
 def save_h5(temp_save_path, chord_stacks, segment_wave, 
             song_name, start, duration, sr,
-            beat, downbeat, bpm, bpm_offset):
+            beat, downbeat, bpm, bpm_offset, signature):
     """
     chord_stacks: List[Dict {
         start: float
@@ -66,6 +66,7 @@ def save_h5(temp_save_path, chord_stacks, segment_wave,
         
         f.attrs["bpm"] = bpm
         f.attrs["bpm_offset"] = bpm_offset
+        f.attrs["signature"] = signature
 
         # chord group
         g = f.create_group("chord_stacks")
@@ -181,7 +182,7 @@ for temp_dir in json_dir.iterdir():
         all_beat = np.arange(beat_start, wave.shape[0] / sr, beat_interval)
         beat_select = (segment_start <= all_beat) * (all_beat <= segment_end)
         all_beat = all_beat[beat_select]
-        all_beat = (all_beat * sr).astype(int)
+        # all_beat = (all_beat * sr).astype(int)
         is_downbeat = np.arange(len(all_beat)) % int(signature.split('/')[0]) == 0
         
         root_idx = get_timbre_idx(tracks, '<root>')
@@ -246,7 +247,8 @@ for temp_dir in json_dir.iterdir():
                 all_beat,
                 is_downbeat,
                 bpm,
-                bpm_offset)
+                bpm_offset,
+                signature)
         data_counts += 1
 print("ok")
 

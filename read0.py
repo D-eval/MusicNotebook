@@ -65,6 +65,8 @@ def load_h5(temp_save_path):
             "chord": chord_arr,
             "beat": beat_arr,
             "downbeat": downbeat_arr,
+            "bpm": f.attrs["bpm"],
+            "offset": f.attrs["bpm_offset"],
         }
     # List[ Dict ] * Ne
     return segment_wave, target, meta
