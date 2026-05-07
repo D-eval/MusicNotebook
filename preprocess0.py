@@ -182,6 +182,8 @@ for temp_dir in json_dir.iterdir():
         all_beat = np.arange(beat_start, wave.shape[0] / sr, beat_interval)
         beat_select = (segment_start <= all_beat) * (all_beat <= segment_end)
         all_beat = all_beat[beat_select]
+        all_beat -= segment_start
+
         # all_beat = (all_beat * sr).astype(int)
         is_downbeat = np.arange(len(all_beat)) % int(signature.split('/')[0]) == 0
         

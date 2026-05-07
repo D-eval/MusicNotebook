@@ -301,10 +301,10 @@ class AudioDataset(Dataset):
         return pitch_min, pitch_max, sorted_pitch
 
 
-# from torch.utils.data import DataLoader
-# dataset = AudioDataset("../preprocess0")
-# h5_path = dataset.paths[0]
-# audio, target, meta = load_h5(h5_path)
+from torch.utils.data import DataLoader
+dataset = AudioDataset("../preprocess0")
+h5_path = dataset.paths[0]
+audio, target, meta = load_h5(h5_path)
 
 
 # loader = DataLoader(
